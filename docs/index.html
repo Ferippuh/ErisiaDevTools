@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Erisia DevTools · Forja do Admin</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="static/styles.css">
+</head>
+<body>
+    <nav class="top-nav">
+        <div class="brand">
+            <img src="static/images/erisia-logo.png" alt="ErisiaRP" class="brand-logo">
+            <span class="brand-name">Erisia DevTools</span>
+        </div>
+        <ul class="nav-links">
+            <li><a href="#hero">Início</a></li>
+            <li><a href="#forja">Ferramenta</a></li>
+            <li><a href="#features">Recursos</a></li>
+        </ul>
+    </nav>
+
+    <header class="hero" id="hero">
+        <div class="hero-content">
+            <h1>Seja bem vindo ao Erisia DevTools,</h1>
+            <p>
+                Um site criado para tornar o dia-a-dia do DEV de Erisia mais leve. Aqui você encontrará uma série de
+                recursos para otimizar seu tempo, como um gerador automático de arquivos <code>sounds.json</code>,
+                dentre muitos outros que ainda estão por vir.
+            </p>
+            <div class="hero-actions">
+                <a class="btn btn-secondary" href="#features">Conhecer recursos</a>
+            </div>
+        </div>
+    </header>
+
+    <section class="features" id="features">
+        <article class="feature-card">
+            <h2>Noteblocks.JSON</h2>
+            <p>Gerador de arquivos <code>sounds.json</code> desenvolvido para o servidor ErisiaRP, apontando áudios de skills, mobs e trilhas ao ler caminhos de pastas e montar a estrutura de apontamento in-game.</p>
+        </article>
+        <article class="feature-card">
+            <h2>Base para novos módulos</h2>
+            <p>Se você é dev em Erisia e tem em mente alguma adição para automatizar processos, fale com <strong>@ferippuh</strong> no Discord e envie sua sugestão.</p>
+        </article>
+        <article class="feature-card">
+            <h2>Torne-se Dev de Erisia</h2>
+            <p>Não faz parte da equipe? Conheça o projeto e se tiver interesse candidate-se a DEV em <strong>discord.gg/erisiarp</strong>.</p>
+        </article>
+    </section>
+
+    <section class="resources" aria-labelledby="resources-title">
+        <h2 id="resources-title">Recursos importantes</h2>
+        <div class="resources-grid">
+            <article class="resource-card">
+                <h3>MythicMobs</h3>
+                <p>Ferramenta para criar e controlar mobs complexos, definindo atributos, habilidades, spawns e IA totalmente personalizados.</p>
+                <a class="btn btn-link" href="https://git.mythiccraft.io/mythiccraft/MythicMobs/-/wikis/home" target="_blank" rel="noopener">Abrir wiki</a>
+            </article>
+            <article class="resource-card">
+                <h3>Model Engine</h3>
+                <p>Plugin que adiciona modelos animados sem mods, integrando com Blockbench e MythicMobs para hitboxes e animações avançadas.</p>
+                <a class="btn btn-link" href="https://git.lumine.io/mythiccraft/model-engine-4/-/wikis/home" target="_blank" rel="noopener">Abrir wiki</a>
+            </article>
+            <article class="resource-card">
+                <h3>ItemsAdder</h3>
+                <p>Pacote que combina resource pack e datapack para inserir itens, blocos e sons personalizados sem exigir mods dos jogadores.</p>
+                <a class="btn btn-link" href="https://itemsadder.devs.beer" target="_blank" rel="noopener">Abrir wiki</a>
+            </article>
+            <article class="resource-card">
+                <h3>MMOCore</h3>
+                <p>Base RPG com classes, atributos e profissões, integrável com MMOItems e outros módulos para progressão estilo MMO.</p>
+                <a class="btn btn-link" href="https://gitlab.com/phoenix-dvpmt/mmocore/-/wikis/Home" target="_blank" rel="noopener">Abrir wiki</a>
+            </article>
+        </div>
+    </section>
+
+    <main class="container" id="forja">
+        <header class="section-header">
+            <h2>Erisia NoteBlocks.json</h2>
+            <p class="section-subtitle">Arraste pastas com arquivos <code>.ogg</code> ou selecione pelo navegador de arquivos.</p>
+        </header>
+        <div class="tool-layout">
+            <div class="tool-primary">
+                <section id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Selecionar pasta de sons">
+                    <div class="drop-zone__content">
+                        <p class="drop-title">Arraste uma pasta de áudios</p>
+                        <p class="drop-subtitle">ou clique para escolher arquivos</p>
+                        <button type="button" id="browse-btn" class="btn btn-ghost">Selecionar pastas</button>
+                        <p class="hint">Suporta múltiplas pastas contendo arquivos <code>.ogg</code>.</p>
+                    </div>
+                    <div class="loading-lantern" aria-hidden="true">
+                        <img src="static/images/lantern.png" alt="" loading="lazy">
+                    </div>
+                    <input type="file" id="directory-picker" webkitdirectory directory multiple hidden>
+                    <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
+                </section>
+
+                <section id="result" class="result" hidden>
+                    <div class="result-header">
+                        <div>
+                            <h3>Pré-visualização do arquivo sounds.json</h3>
+                            <p id="source-info" class="meta"></p>
+                        </div>
+                        <button id="download-btn" type="button" class="btn btn-primary">Baixar sounds.json</button>
+                    </div>
+                    <textarea id="json-output" readonly rows="18" spellcheck="false"></textarea>
+                </section>
+            </div>
+
+            <aside class="hero-tutorial">
+                <h2>Como funciona</h2>
+                <ol>
+                    <li>Arraste uma pasta com arquivos <code>.ogg</code> para a área indicada ou clique em “Selecionar pastas”.</li>
+                    <li>O sistema captura toda a estrutura de subpastas e cria chaves seguindo o caminho <code>pasta.subpasta.arquivo</code>.</li>
+                    <li>Arquivos numerados com sufixos <code>_1</code>, <code>_2</code> etc. são agrupados em um mesmo registro, gerando uma lista de variações para reprodução aleatória.</li>
+                    <li>Após o processamento, revise o <code>sounds.json</code> e baixe o arquivo para incluir no recurso do servidor.</li>
+                </ol>
+                <div class="tutorial-examples">
+                    <h3>Exemplo de entrada</h3>
+                    <pre>
+Sounds/
+ └─ littleroom/
+    └─ boreal_druid/
+       ├─ druid_vox_1.ogg
+       ├─ druid_vox_2.ogg
+       └─ howl.ogg
+                    </pre>
+                    <h3>Resultado esperado</h3>
+                    <pre class="json-example">
+{
+  "littleroom.boreal_druid.druid_vox": {
+    "sounds": [
+      "littleroom/boreal_druid/druid_vox_1",
+      "littleroom/boreal_druid/druid_vox_2"
+    ]
+  },
+  "littleroom.boreal_druid.howl": {
+    "sounds": [
+      "littleroom/boreal_druid/howl"
+    ]
+  }
+}
+                    </pre>
+                </div>
+            </aside>
+        </div>
+    </main>
+
+    <footer class="footer">
+        Criado para o Servidor ErisiaRP e desenvolvido por Ferippu
+    </footer>
+
+    <script src="static/main.js"></script>
+</body>
+</html>
