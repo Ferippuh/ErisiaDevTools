@@ -4,8 +4,7 @@
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" type="image/png" sizes="128x128" href="static/images/erisia-logo.png">
-    <title>ErisiaDevTools</title>
+    <title>Erisia DevTools · Forja do Admin</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
@@ -20,6 +19,7 @@
         <ul class="nav-links">
             <li><a href="#hero">Início</a></li>
             <li><a href="#noteblock">Ferramenta</a></li>
+            <li><a href="#modeldata">ModelData</a></li>
             <li><a href="#features">Recursos</a></li>
         </ul>
     </nav>
@@ -49,7 +49,7 @@
         </article>
         <article class="feature-card">
             <h2>Torne-se Dev de Erisia</h2>
-            <p>Não faz parte da equipe? Conheça o projeto e caso tenha interesse, candidate-se a DEV em <strong>discord.gg/erisiarp</strong>.</p>
+            <p>Não faz parte da equipe? Conheça o projeto e se tiver interesse candidate-se a DEV em <strong>discord.gg/erisiarp</strong>.</p>
         </article>
     </section>
 
@@ -105,6 +105,7 @@
                         <div>
                             <h3>Pré-visualização do arquivo sounds.json</h3>
                             <p id="source-info" class="meta"></p>
+                            <p id="file-count" class="meta" hidden></p>
                         </div>
                         <button id="download-btn" type="button" class="btn btn-primary">Baixar sounds.json</button>
                     </div>
@@ -151,10 +152,96 @@ Sounds/
         </div>
     </main>
 
+    <main class="container" id="modeldata">
+        <header class="section-header">
+            <h2>Erisia ModelData Mixer</h2>
+            <p class="section-subtitle">Prepare overrides de <code>custom_model_data</code> mesclando arquivos existentes com novos modelos.</p>
+        </header>
+
+        <div class="tool-layout modeldata-layout">
+            <div class="tool-primary">
+                <div class="modeldata-dropgrid">
+                    <section id="model-additions-drop" class="drop-zone model-drop" tabindex="0" role="button" aria-label="Selecionar arquivos com novos CustomModelData">
+                        <div class="drop-zone__content">
+                            <p class="drop-title">Novos modelos (.json)</p>
+                            <p class="drop-subtitle">Arraste arquivos com overrides a serem adicionados ou selecione pelo navegador.</p>
+                            <button type="button" id="model-additions-browse" class="btn btn-ghost">Selecionar arquivos</button>
+                            <p class="hint">Aceita múltiplos arquivos ou pastas.</p>
+                        </div>
+                        <div class="loading-lantern" aria-hidden="true">
+                            <img src="static/images/lantern.png" alt="" loading="lazy">
+                        </div>
+                        <input type="file" id="model-additions-input" accept=".json" webkitdirectory directory multiple hidden>
+                        <p id="model-additions-feedback" class="feedback" role="status" aria-live="polite"></p>
+                        <p id="model-additions-summary" class="meta modeldata-meta" aria-live="polite"></p>
+                    </section>
+
+                    <section id="model-base-drop" class="drop-zone model-drop" tabindex="0" role="button" aria-label="Selecionar pasta minecraft/models/item existente">
+                        <div class="drop-zone__content">
+                            <p class="drop-title">Modelos atuais (minecraft/models/item)</p>
+                            <p class="drop-subtitle">Arraste a pasta existente ou selecione pelo navegador.</p>
+                            <button type="button" id="model-base-browse" class="btn btn-ghost">Selecionar pasta</button>
+                            <p class="hint">Utilize a pasta oficial do resource pack.</p>
+                        </div>
+                        <div class="loading-lantern" aria-hidden="true">
+                            <img src="static/images/lantern.png" alt="" loading="lazy">
+                        </div>
+                        <input type="file" id="model-base-input" accept=".json" webkitdirectory directory multiple hidden>
+                        <p id="model-base-feedback" class="feedback" role="status" aria-live="polite"></p>
+                        <p id="model-base-summary" class="meta modeldata-meta" aria-live="polite"></p>
+                    </section>
+                </div>
+
+                <div class="modeldata-actions">
+                    <button id="modeldata-process-btn" type="button" class="btn btn-secondary" disabled>Mesclar arquivos</button>
+                    <p id="modeldata-feedback" class="feedback" role="status" aria-live="polite"></p>
+                </div>
+
+                <section id="modeldata-preview" class="result" hidden>
+                    <div class="result-header">
+                        <div>
+                            <h3>Pré-visualização dos arquivos</h3>
+                            <p id="modeldata-summary" class="meta"></p>
+                        </div>
+                        <button id="modeldata-download-btn" type="button" class="btn btn-primary" disabled>Baixar pacote .zip</button>
+                    </div>
+                    <div id="modeldata-preview-list" class="modeldata-preview-list"></div>
+                </section>
+            </div>
+
+            <aside class="hero-tutorial">
+                <h2>Como funciona</h2>
+                <ol>
+                    <li>Carregue os arquivos .json com novos overrides no painel “Novos modelos”.</li>
+                    <li>Carregue a pasta atual <code>minecraft/models/item</code> no painel “Modelos atuais”.</li>
+                    <li>Clique em “Mesclar arquivos” para gerar os novos valores de <code>custom_model_data</code>.</li>
+                    <li>Revise os arquivos modificados e baixe o pacote .zip para substituir no resource pack.</li>
+                </ol>
+                <div class="tutorial-examples">
+                    <h3>Exemplo de resultado</h3>
+                    <pre class="json-example">
+{
+  "parent": "item/generated",
+  "textures": {
+    "layer0": "item/diamond_sword"
+  },
+  "overrides": [
+    { "predicate": { "custom_model_data": 1001 }, "model": "item/diamond_sword/base" },
+    { "predicate": { "custom_model_data": 1002 }, "model": "item/diamond_sword/flame" },
+    { "predicate": { "custom_model_data": 1003 }, "model": "item/diamond_sword/frost" }
+  ]
+}
+                    </pre>
+                </div>
+            </aside>
+        </div>
+    </main>
+
     <footer class="footer">
         Criado para o Servidor ErisiaRP e desenvolvido por Ferippu
     </footer>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="static/main.js"></script>
 </body>
 </html>
