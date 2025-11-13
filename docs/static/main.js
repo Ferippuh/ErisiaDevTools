@@ -741,7 +741,7 @@ if (modelAdditionsDrop && modelBaseDrop) {
                     }
                     changedFiles.push({
                         key,
-                        jsonText: JSON.stringify(mergeOutcome.json, null, 2),
+                        jsonText: formatModelJson(mergeOutcome.json),
                         isNew: false,
                         addedCount: mergeOutcome.addedCount,
                         startValue: mergeOutcome.startValue,
@@ -760,9 +760,10 @@ if (modelAdditionsDrop && modelBaseDrop) {
                 stats.overridesAdded += addedCount;
                 changedFiles.push({
                     key,
-                    jsonText: sourceEntry?.text ?? JSON.stringify(jsonClone, null, 2),
+                    jsonText: formatModelJson(jsonClone),
                     isNew: true,
                     addedCount,
+                    duplicateCount: 0,
                 });
             }
         }
@@ -965,5 +966,129 @@ if (modelAdditionsDrop && modelBaseDrop) {
             parts.push(`${stats.duplicatesSkipped} modelo${stats.duplicatesSkipped === 1 ? "" : "s"} duplicado${stats.duplicatesSkipped === 1 ? "" : "s"}`);
         }
         return parts.join(" · ");
+    }
+
+    function formatModelJson(json) {
+        const indent = (level) => "    ".repeat(level);
+        const lines = ["{"];
+
+        const orderedKeys = [];
+        const seen = new Set();
+        const preferredOrder = ["parent", "textures", "overrides"];
+
+        for (const key of preferredOrder) {
+            if (Object.prototype.hasOwnProperty.call(json, key)) {
+                orderedKeys.push(key);
+                seen.add(key);
+            }
+        }
+
+        for (const key of Object.keys(json || {})) {
+            if (!seen.has(key)) {
+                orderedKeys.push(key);
+                seen.add(key);
+            }
+        }
+
+        orderedKeys.forEach((key, index) => {
+            const value = json[key];
+            if (value === undefined) {
+                return;
+            }
+
+            let formattedValue;
+            if (key === "overrides" && Array.isArray(value)) {
+                formattedValue = formatOverridesArray(value, 1);
+            } else if (isPlainObject(value)) {
+                formattedValue = formatMultilineObject(value, 1);
+            } else {
+                formattedValue = JSON.stringify(value);
+            }
+
+            const suffix = index < orderedKeys.length - 1 ? "," : "";
+            lines.push(`${indent(1)}"${key}": ${formattedValue}${suffix}`);
+        });
+
+        lines.push("}");
+        return lines.join("\n");
+    }
+
+    function formatMultilineObject(obj, level) {
+        const indent = (lvl) => "    ".repeat(lvl);
+        const entries = Object.entries(obj || {});
+        if (!entries.length) {
+            return "{}";
+        }
+
+        const lines = ["{"];
+        entries.forEach(([key, value], index) => {
+            let formattedValue;
+            if (isPlainObject(value)) {
+                formattedValue = formatMultilineObject(value, level + 1);
+            } else {
+                formattedValue = JSON.stringify(value);
+            }
+            const suffix = index < entries.length - 1 ? "," : "";
+            lines.push(`${indent(level + 1)}"${key}": ${formattedValue}${suffix}`);
+        });
+        lines.push(`${indent(level)}}`);
+        return lines.join("\n");
+    }
+
+    function formatOverridesArray(overrides, level) {
+        if (!Array.isArray(overrides) || !overrides.length) {
+            return "[]";
+        }
+        const indent = (lvl) => "    ".repeat(lvl);
+        const lines = ["["];
+
+        overrides.forEach((override, index) => {
+            const entry = formatOverrideEntry(override);
+            const suffix = index < overrides.length - 1 ? "," : "";
+            lines.push(`${indent(level + 1)}${entry}${suffix}`);
+        });
+
+        lines.push(`${indent(level)}]`);
+        return lines.join("\n");
+    }
+
+    function formatOverrideEntry(override) {
+        const { predicate = {}, ...rest } = override || {};
+        const parts = [`"predicate": ${formatInlineObject(predicate)}`];
+
+        const orderedRestKeys = Object.keys(rest).sort((a, b) => {
+            if (a === "model") {
+                return -1;
+            }
+            if (b === "model") {
+                return 1;
+            }
+            return a.localeCompare(b);
+        });
+
+        orderedRestKeys.forEach((key) => {
+            const value = rest[key];
+            const formattedValue = isPlainObject(value) ? formatInlineObject(value) : JSON.stringify(value);
+            parts.push(`"${key}": ${formattedValue}`);
+        });
+
+        return `{${parts.join(", ")}}`;
+    }
+
+    function formatInlineObject(obj) {
+        const entries = Object.entries(obj || {});
+        if (!entries.length) {
+            return "{}";
+        }
+        return `{${entries
+            .map(([key, value]) => {
+                const formattedValue = isPlainObject(value) ? formatInlineObject(value) : JSON.stringify(value);
+                return `"${key}": ${formattedValue}`;
+            })
+            .join(", ")}}`;
+    }
+
+    function isPlainObject(value) {
+        return Object.prototype.toString.call(value) === "[object Object]";
     }
 }
