@@ -724,6 +724,7 @@ if (modelAdditionsDrop && modelBaseDrop) {
             merged: 0,
             created: 0,
             overridesAdded: 0,
+            duplicatesSkipped: 0,
         };
         let skippedCount = 0;
 
@@ -735,6 +736,9 @@ if (modelAdditionsDrop && modelBaseDrop) {
                 if (mergeOutcome.addedCount > 0) {
                     stats.merged += 1;
                     stats.overridesAdded += mergeOutcome.addedCount;
+                    if (mergeOutcome.duplicateCount) {
+                        stats.duplicatesSkipped += mergeOutcome.duplicateCount;
+                    }
                     changedFiles.push({
                         key,
                         jsonText: JSON.stringify(mergeOutcome.json, null, 2),
@@ -742,9 +746,11 @@ if (modelAdditionsDrop && modelBaseDrop) {
                         addedCount: mergeOutcome.addedCount,
                         startValue: mergeOutcome.startValue,
                         endValue: mergeOutcome.endValue,
+                        duplicateCount: mergeOutcome.duplicateCount,
                     });
                 } else {
                     skippedCount += 1;
+                    stats.duplicatesSkipped += mergeOutcome.duplicateCount;
                 }
             } else {
                 const jsonClone = JSON.parse(JSON.stringify(addition.json));
@@ -777,15 +783,30 @@ if (modelAdditionsDrop && modelBaseDrop) {
             }
         }
 
+        const existingModels = new Set(
+            baseOverrides
+                .map(getOverrideModelPath)
+                .filter((modelPath) => !!modelPath)
+        );
+
         const startValue = currentMax === null ? 1 : currentMax + 1;
         let nextValue = startValue;
         const appended = [];
+        let duplicateCount = 0;
 
         for (const rawOverride of additionOverrides) {
             const normalized = normalizeModelOverride(rawOverride);
-            if (!normalized.model) {
+            const normalizedModel = getOverrideModelPath(normalized);
+            if (!normalizedModel) {
                 continue;
             }
+
+            if (existingModels.has(normalizedModel)) {
+                duplicateCount += 1;
+                continue;
+            }
+
+            existingModels.add(normalizedModel);
             normalized.predicate.custom_model_data = nextValue;
             appended.push({
                 custom_model_data: nextValue,
@@ -801,6 +822,7 @@ if (modelAdditionsDrop && modelBaseDrop) {
                 addedCount: 0,
                 startValue: null,
                 endValue: null,
+                duplicateCount,
             };
         }
 
@@ -817,6 +839,7 @@ if (modelAdditionsDrop && modelBaseDrop) {
             addedCount: appended.length,
             startValue: appended[0].custom_model_data,
             endValue: appended[appended.length - 1].custom_model_data,
+            duplicateCount,
         };
     }
 
@@ -825,7 +848,21 @@ if (modelAdditionsDrop && modelBaseDrop) {
         if (!clone.predicate || typeof clone.predicate !== "object") {
             clone.predicate = {};
         }
+        if (typeof clone.model === "string") {
+            clone.model = clone.model.trim();
+        }
         return clone;
+    }
+
+    function getOverrideModelPath(override) {
+        if (!override || typeof override !== "object") {
+            return "";
+        }
+        const model = override.model;
+        if (typeof model !== "string") {
+            return "";
+        }
+        return model.trim();
     }
 
     function getCustomModelDataValue(override) {
@@ -896,9 +933,12 @@ if (modelAdditionsDrop && modelBaseDrop) {
             details.open = files.length <= 3 && index === 0;
 
             const summary = document.createElement("summary");
+            const duplicateNote = file.duplicateCount
+                ? ` · ${file.duplicateCount} duplicado${file.duplicateCount === 1 ? "" : "s"} ignorado${file.duplicateCount === 1 ? "" : "s"}`
+                : "";
             summary.textContent = file.isNew
                 ? `${file.key} • novo arquivo (${file.addedCount} override${file.addedCount === 1 ? "" : "s"})`
-                : `${file.key} • +${file.addedCount} override${file.addedCount === 1 ? "" : "s"} (CMD ${file.startValue} → ${file.endValue})`;
+                : `${file.key} • +${file.addedCount} override${file.addedCount === 1 ? "" : "s"} (CMD ${file.startValue} → ${file.endValue})${duplicateNote}`;
 
             const pre = document.createElement("pre");
             pre.textContent = file.jsonText;
@@ -920,6 +960,9 @@ if (modelAdditionsDrop && modelBaseDrop) {
         parts.push(`${stats.overridesAdded} override${stats.overridesAdded === 1 ? "" : "s"} adicionad${stats.overridesAdded === 1 ? "o" : "os"}`);
         if (skippedCount) {
             parts.push(`${skippedCount} sem alterações`);
+        }
+        if (stats.duplicatesSkipped) {
+            parts.push(`${stats.duplicatesSkipped} modelo${stats.duplicatesSkipped === 1 ? "" : "s"} duplicado${stats.duplicatesSkipped === 1 ? "" : "s"}`);
         }
         return parts.join(" · ");
     }
