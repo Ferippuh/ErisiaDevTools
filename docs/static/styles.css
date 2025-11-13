@@ -419,6 +419,15 @@ textarea:focus {
     .tool-layout {
         grid-template-columns: 1fr;
     }
+
+    .modeldata-dropgrid {
+        grid-template-columns: 1fr;
+    }
+
+    .modeldata-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
 }
 
 .hero-tutorial {
@@ -534,4 +543,69 @@ pre {
 .tool-primary {
     display: grid;
     gap: 1.5rem;
+}
+
+.modeldata-layout {
+    align-items: start;
+}
+
+.modeldata-dropgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1.75rem;
+}
+
+.model-drop {
+    min-height: 280px;
+}
+
+.modeldata-meta {
+    margin-top: 0.5rem;
+    min-height: 1.2rem;
+    color: var(--color-muted);
+    font-size: clamp(0.5rem, 0.85vw, 0.7rem);
+    text-align: center;
+}
+
+.modeldata-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+    justify-content: flex-start;
+}
+
+.modeldata-actions .feedback {
+    margin: 0;
+    text-align: left;
+}
+
+.modeldata-preview-list {
+    display: grid;
+    gap: 1rem;
+    max-height: 420px;
+    overflow: auto;
+    padding-right: 0.5rem;
+}
+
+.modeldata-preview-list details {
+    border: 1px solid rgba(224, 160, 48, 0.25);
+    background-color: rgba(6, 10, 18, 0.9);
+    padding: 0.75rem 1rem;
+}
+
+.modeldata-preview-list summary {
+    cursor: pointer;
+    font-size: clamp(0.6rem, 1vw, 0.85rem);
+    color: var(--color-accent-strong);
+}
+
+.modeldata-preview-list summary:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 4px;
+}
+
+.modeldata-preview-list pre {
+    margin-top: 0.75rem;
+    max-height: 240px;
 }
