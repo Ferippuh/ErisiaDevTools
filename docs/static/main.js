@@ -536,7 +536,10 @@ if (modelAdditionsDrop && modelBaseDrop) {
                 return;
             }
 
-            const zipBlob = await buildModelZip(mergeResult.changedFiles);
+            const zipBlob = await buildModelZip({
+                changedFiles: mergeResult.changedFiles,
+                baseMap: baseParse.map,
+            });
             modelState.zipBlob = zipBlob;
 
             renderPreviewList(previewList, mergeResult.changedFiles);
@@ -703,7 +706,7 @@ if (modelAdditionsDrop && modelBaseDrop) {
             try {
                 const text = await file.text();
                 const json = JSON.parse(text);
-                map.set(key, { json });
+                map.set(key, { json, text });
             } catch (error) {
                 errors.push({
                     key,
@@ -746,11 +749,12 @@ if (modelAdditionsDrop && modelBaseDrop) {
             } else {
                 const jsonClone = JSON.parse(JSON.stringify(addition.json));
                 const addedCount = countOverridesInJson(jsonClone);
+                const sourceEntry = additionMap.get(key);
                 stats.created += 1;
                 stats.overridesAdded += addedCount;
                 changedFiles.push({
                     key,
-                    jsonText: JSON.stringify(jsonClone, null, 2),
+                    jsonText: sourceEntry?.text ?? JSON.stringify(jsonClone, null, 2),
                     isNew: true,
                     addedCount,
                 });
@@ -843,15 +847,29 @@ if (modelAdditionsDrop && modelBaseDrop) {
         return Array.isArray(json.overrides) ? json.overrides.length : 0;
     }
 
-    async function buildModelZip(files) {
+    async function buildModelZip({ changedFiles, baseMap }) {
         if (typeof JSZip === "undefined") {
             throw new Error("JSZip não está disponível.");
         }
         const zip = new JSZip();
         const root = zip.folder("minecraft").folder("models").folder("item");
 
-        for (const file of files) {
-            root.file(file.key, file.jsonText);
+        const changedLookup = new Map();
+        for (const file of changedFiles) {
+            changedLookup.set(file.key, file);
+        }
+
+        for (const [key, entry] of baseMap.entries()) {
+            const changed = changedLookup.get(key);
+            const content = changed ? changed.jsonText : entry.text ?? JSON.stringify(entry.json, null, 2);
+            root.file(key, content);
+            if (changed) {
+                changedLookup.delete(key);
+            }
+        }
+
+        for (const [key, file] of changedLookup.entries()) {
+            root.file(key, file.jsonText);
         }
 
         return zip.generateAsync({ type: "blob" });
