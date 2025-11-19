@@ -617,10 +617,15 @@ if (modelAdditionsDrop && modelBaseDrop) {
             updateFeedbackElement(feedbackEl, "Carregando arquivos...", "info");
 
             try {
-                const jsonFiles = filterJsonFiles(files);
+                // For texture optimizer, accept .bbmodel files
+                const isTextureOptimizer = zone.id === "texture-models-drop";
+                const acceptedFiles = isTextureOptimizer 
+                    ? files.filter(f => f.name.toLowerCase().endsWith('.bbmodel'))
+                    : filterJsonFiles(files);
+                
                 await onFiles({
-                    jsonFiles,
-                    ignoredCount: files.length - jsonFiles.length,
+                    jsonFiles: acceptedFiles,
+                    ignoredCount: files.length - acceptedFiles.length,
                     totalCount: files.length,
                 });
             } catch (error) {
@@ -1091,4 +1096,608 @@ if (modelAdditionsDrop && modelBaseDrop) {
     function isPlainObject(value) {
         return Object.prototype.toString.call(value) === "[object Object]";
     }
+}
+
+// ============================================================================
+// Texture Optimizer System
+// ============================================================================
+
+const textureOptimizerSection = document.getElementById("texture-optimizer");
+if (textureOptimizerSection) {
+    const modelsDrop = document.getElementById("texture-models-drop");
+    const modelsInput = document.getElementById("texture-models-input");
+    const modelsBrowseBtn = document.getElementById("texture-models-browse");
+    const modelsFeedback = document.getElementById("texture-models-feedback");
+    const modelsSummary = document.getElementById("texture-models-summary");
+    const optimizeBtn = document.getElementById("texture-optimize-btn");
+    const optimizeFeedback = document.getElementById("texture-optimize-feedback");
+    const previewSection = document.getElementById("texture-preview");
+    const previewContent = document.getElementById("texture-preview-content");
+    const previewSummary = document.getElementById("texture-summary");
+    const downloadBtn = document.getElementById("texture-download-btn");
+
+    const textureState = {
+        modelFiles: [],
+        textureMap: new Map(), // path -> ImageData
+        textureGroups: new Map(), // similar textures grouped
+        atlasBlob: null,
+        optimizedModels: [],
+    };
+
+    let isProcessingTextures = false;
+
+    setupModelDropZone({
+        zone: modelsDrop,
+        input: modelsInput,
+        browseBtn: modelsBrowseBtn,
+        feedbackEl: modelsFeedback,
+        async onFiles({ jsonFiles, ignoredCount }) {
+            await handleModelFiles(jsonFiles, ignoredCount);
+        },
+    });
+
+    optimizeBtn?.addEventListener("click", () => {
+        void handleTextureOptimization();
+    });
+
+    downloadBtn?.addEventListener("click", () => {
+        if (!textureState.atlasBlob || !textureState.optimizedModels.length) {
+            updateFeedbackElement(optimizeFeedback, "Gere a otimização antes de baixar.", "error");
+            return;
+        }
+        triggerTextureDownload();
+    });
+
+    function refreshTextureState() {
+        const canOptimize = textureState.modelFiles.length > 0;
+        if (optimizeBtn) {
+            optimizeBtn.disabled = !canOptimize || isProcessingTextures;
+        }
+        if (downloadBtn) {
+            downloadBtn.disabled = !textureState.atlasBlob || !textureState.optimizedModels.length;
+        }
+    }
+
+    async function handleModelFiles(bbmodelFiles, ignoredCount) {
+        textureState.modelFiles = bbmodelFiles.filter(f => f.name.toLowerCase().endsWith('.bbmodel'));
+        
+        if (textureState.modelFiles.length === 0) {
+            updateFeedbackElement(modelsFeedback, "Nenhum arquivo .bbmodel detectado.", "error");
+            if (modelsSummary) modelsSummary.textContent = "";
+            textureState.atlasBlob = null;
+            textureState.optimizedModels = [];
+            if (previewSection) previewSection.hidden = true;
+            refreshTextureState();
+            return;
+        }
+
+        const messageParts = [`${textureState.modelFiles.length} arquivo${textureState.modelFiles.length === 1 ? "" : "s"} .bbmodel carregado${textureState.modelFiles.length === 1 ? "" : "s"}.`];
+        if (ignoredCount > 0) {
+            messageParts.push(`${ignoredCount} arquivo${ignoredCount === 1 ? "" : "s"} ignorado${ignoredCount === 1 ? "" : "s"}.`);
+        }
+        updateFeedbackElement(modelsFeedback, messageParts.join(" "), "success");
+
+        if (modelsSummary) {
+            const names = textureState.modelFiles.slice(0, 3).map(f => f.name.replace('.bbmodel', '')).join(", ");
+            const suffix = textureState.modelFiles.length > 3 ? ", ..." : "";
+            modelsSummary.textContent = `${textureState.modelFiles.length} modelo${textureState.modelFiles.length === 1 ? "" : "s"} — ${names}${suffix}`;
+        }
+
+        updateFeedbackElement(optimizeFeedback, "", "");
+        textureState.atlasBlob = null;
+        textureState.optimizedModels = [];
+        if (previewSection) previewSection.hidden = true;
+        refreshTextureState();
+    }
+
+    async function handleTextureOptimization() {
+        if (isProcessingTextures || !optimizeBtn || textureState.modelFiles.length === 0) {
+            return;
+        }
+
+        isProcessingTextures = true;
+        if (textureOptimizerSection) {
+            textureOptimizerSection.setAttribute("aria-busy", "true");
+        }
+        updateFeedbackElement(optimizeFeedback, "Analisando modelos e texturas...", "info");
+        if (previewSection) previewSection.hidden = true;
+        refreshTextureState();
+
+        try {
+            // Parse all .bbmodel files
+            const models = [];
+            const texturePaths = new Set();
+            
+            for (const file of textureState.modelFiles) {
+                try {
+                    const text = await file.text();
+                    const model = JSON.parse(text);
+                    models.push({ file, model, name: file.name });
+                    
+                    // Extract texture paths from model
+                    extractTexturePaths(model, texturePaths);
+                } catch (error) {
+                    console.error(`Erro ao ler ${file.name}:`, error);
+                }
+            }
+
+            if (models.length === 0) {
+                updateFeedbackElement(optimizeFeedback, "Nenhum modelo válido foi encontrado.", "error");
+                return;
+            }
+
+            updateFeedbackElement(optimizeFeedback, `Carregando ${texturePaths.size} textura${texturePaths.size === 1 ? "" : "s"}...`, "info");
+
+            // Load all textures
+            const textureData = await loadTextures(texturePaths, textureState.modelFiles);
+            
+            updateFeedbackElement(optimizeFeedback, "Detectando texturas duplicadas...", "info");
+
+            // Group similar textures
+            const textureGroups = groupSimilarTextures(textureData);
+            
+            updateFeedbackElement(optimizeFeedback, "Criando atlas de texturas...", "info");
+
+            // Create texture atlas
+            const atlasResult = await createTextureAtlas(textureGroups);
+            
+            updateFeedbackElement(optimizeFeedback, "Atualizando modelos...", "info");
+
+            // Update models with atlas references
+            const optimizedModels = updateModelsWithAtlas(models, textureGroups, atlasResult.mapping);
+            
+            // Create ZIP with optimized models and atlas
+            const zipBlob = await createOptimizedZip(optimizedModels, atlasResult.canvas);
+            textureState.atlasBlob = zipBlob;
+            textureState.optimizedModels = optimizedModels;
+
+            // Render preview
+            renderTexturePreview(previewContent, {
+                modelsProcessed: models.length,
+                texturesOriginal: texturePaths.size,
+                texturesUnique: textureGroups.size,
+                texturesSaved: texturePaths.size - textureGroups.size,
+                atlasSize: `${atlasResult.canvas.width}x${atlasResult.canvas.height}`,
+            });
+
+            if (previewSection) previewSection.hidden = false;
+            if (previewSummary) {
+                previewSummary.textContent = `${models.length} modelo${models.length === 1 ? "" : "s"} otimizado${models.length === 1 ? "" : "s"} · ${textureGroups.size} textura${textureGroups.size === 1 ? "" : "s"} únicas · ${texturePaths.size - textureGroups.size} duplicada${texturePaths.size - textureGroups.size === 1 ? "" : "s"} removida${texturePaths.size - textureGroups.size === 1 ? "" : "s"}`;
+            }
+
+            updateFeedbackElement(optimizeFeedback, "Otimização concluída! Revise os resultados abaixo.", "success");
+        } catch (error) {
+            console.error("Erro ao otimizar texturas:", error);
+            updateFeedbackElement(optimizeFeedback, "Erro ao otimizar texturas. Verifique o console para detalhes.", "error");
+        } finally {
+            isProcessingTextures = false;
+            if (textureOptimizerSection) {
+                textureOptimizerSection.setAttribute("aria-busy", "false");
+            }
+            refreshTextureState();
+        }
+    }
+
+    function extractTexturePaths(model, texturePaths) {
+        if (!model || typeof model !== 'object') return;
+        
+        // Blockbench models store textures in various places
+        if (model.textures && typeof model.textures === 'object') {
+            for (const key in model.textures) {
+                const texture = model.textures[key];
+                if (typeof texture === 'string' && texture.trim()) {
+                    texturePaths.add(texture.trim());
+                }
+            }
+        }
+        
+        // Also check elements for texture references
+        if (Array.isArray(model.elements)) {
+            model.elements.forEach(element => {
+                if (element.faces && typeof element.faces === 'object') {
+                    for (const faceKey in element.faces) {
+                        const face = element.faces[faceKey];
+                        if (face && face.texture !== undefined) {
+                            const texRef = face.texture;
+                            if (typeof texRef === 'number') {
+                                // Texture index reference
+                                if (model.textures && Array.isArray(model.textures)) {
+                                    const tex = model.textures[texRef];
+                                    if (typeof tex === 'string') {
+                                        texturePaths.add(tex.trim());
+                                    }
+                                }
+                            } else if (typeof texRef === 'string') {
+                                texturePaths.add(texRef.trim());
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    async function loadTextures(texturePaths, modelFiles) {
+        const textureData = new Map();
+        const loadedTextures = new Set();
+        
+        // Create a file map from model files for texture lookup
+        const fileMap = new Map();
+        for (const modelFile of modelFiles) {
+            const relativePath = normalizePath(getRelativePath(modelFile));
+            const fileName = relativePath.split('/').pop() || modelFile.name;
+            fileMap.set(fileName.toLowerCase(), modelFile);
+        }
+        
+        // Try to load each texture
+        for (const texturePath of texturePaths) {
+            if (loadedTextures.has(texturePath)) continue;
+            
+            let textureImage = null;
+            let loaded = false;
+            
+            // Try to load texture as image
+            try {
+                // First, try to create image from path (if it's a data URL or absolute URL)
+                if (texturePath.startsWith('data:') || texturePath.startsWith('http://') || texturePath.startsWith('https://')) {
+                    textureImage = await loadImageFromURL(texturePath);
+                    loaded = true;
+                } else {
+                    // Try to find texture file in the dropped files
+                    const textureFileName = texturePath.split('/').pop() || texturePath;
+                    const textureFile = Array.from(modelFiles).find(f => {
+                        const name = (f.webkitRelativePath || f.name || '').toLowerCase();
+                        return name.includes(textureFileName.toLowerCase()) || 
+                               (name.endsWith('.png') && name.includes(texturePath.toLowerCase().replace(/\.(png|jpg|jpeg)$/i, '')));
+                    });
+                    
+                    if (textureFile) {
+                        const url = URL.createObjectURL(textureFile);
+                        textureImage = await loadImageFromURL(url);
+                        URL.revokeObjectURL(url);
+                        loaded = true;
+                    }
+                }
+            } catch (error) {
+                console.warn(`Não foi possível carregar textura ${texturePath}:`, error);
+            }
+            
+            // If we couldn't load, create a placeholder
+            if (!loaded || !textureImage) {
+                const canvas = document.createElement('canvas');
+                canvas.width = 64;
+                canvas.height = 64;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#404040';
+                ctx.fillRect(0, 0, 64, 64);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '10px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('Missing', 32, 28);
+                const shortPath = texturePath.length > 20 ? texturePath.substring(0, 17) + '...' : texturePath;
+                ctx.fillText(shortPath, 32, 42);
+                
+                textureImage = canvas;
+            }
+            
+            // Get image data
+            const canvas = document.createElement('canvas');
+            canvas.width = textureImage.width || textureImage.naturalWidth || 64;
+            canvas.height = textureImage.height || textureImage.naturalHeight || 64;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(textureImage, 0, 0);
+            
+            const textureInfo = {
+                path: texturePath,
+                image: canvas,
+                width: canvas.width,
+                height: canvas.height,
+                data: ctx.getImageData(0, 0, canvas.width, canvas.height),
+            };
+            
+            textureData.set(texturePath, textureInfo);
+            // Also store in textureState for later use
+            textureState.textureMap.set(texturePath, textureInfo);
+            
+            loadedTextures.add(texturePath);
+        }
+        
+        return textureData;
+    }
+
+    function loadImageFromURL(url) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => resolve(img);
+            img.onerror = reject;
+            img.src = url;
+        });
+    }
+
+    function groupSimilarTextures(textureData) {
+        const groups = new Map();
+        const processed = new Set();
+        
+        for (const [path, data] of textureData.entries()) {
+            if (processed.has(path)) continue;
+            
+            // Find similar textures
+            const similar = [path];
+            processed.add(path);
+            
+            for (const [otherPath, otherData] of textureData.entries()) {
+                if (processed.has(otherPath)) continue;
+                
+                // Compare textures
+                if (areTexturesSimilar(data, otherData)) {
+                    similar.push(otherPath);
+                    processed.add(otherPath);
+                }
+            }
+            
+            // Use the first path as the canonical one
+            groups.set(similar[0], similar);
+        }
+        
+        return groups;
+    }
+
+    function areTexturesSimilar(texture1, texture2, threshold = 0.95) {
+        // Simple comparison: check if images are identical or very similar
+        // For production, you'd want more sophisticated image comparison
+        
+        if (texture1.width !== texture2.width || texture1.height !== texture2.height) {
+            return false;
+        }
+        
+        const data1 = texture1.data.data;
+        const data2 = texture2.data.data;
+        
+        if (data1.length !== data2.length) {
+            return false;
+        }
+        
+        // Check if images are identical
+        let identical = true;
+        for (let i = 0; i < data1.length; i += 4) {
+            // Compare RGBA values (allow small differences for compression artifacts)
+            const diff = Math.abs(data1[i] - data2[i]) +
+                        Math.abs(data1[i+1] - data2[i+1]) +
+                        Math.abs(data1[i+2] - data2[i+2]) +
+                        Math.abs(data1[i+3] - data2[i+3]);
+            if (diff > 10) { // Threshold for "identical"
+                identical = false;
+                break;
+            }
+        }
+        
+        if (identical) return true;
+        
+        // For more sophisticated comparison, you could:
+        // 1. Calculate histogram similarity
+        // 2. Use perceptual hashing
+        // 3. Compare color distributions
+        // For now, we'll only group identical textures
+        
+        return false;
+    }
+
+    async function createTextureAtlas(textureGroups) {
+        // Calculate atlas size
+        let totalArea = 0;
+        const textures = [];
+        
+        // First, we need to ensure textureMap is populated
+        // This should have been done in loadTextures, but let's be safe
+        if (textureState.textureMap.size === 0) {
+            // Re-populate from textureGroups if needed
+            for (const [canonicalPath] of textureGroups.entries()) {
+                // Try to get from a global texture cache if available
+                // For now, we'll need to reload or use placeholder
+            }
+        }
+        
+        for (const [canonicalPath, group] of textureGroups.entries()) {
+            const textureData = textureState.textureMap.get(canonicalPath);
+            if (!textureData) {
+                // Create placeholder if missing
+                const canvas = document.createElement('canvas');
+                canvas.width = 64;
+                canvas.height = 64;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#808080';
+                ctx.fillRect(0, 0, 64, 64);
+                
+                textureData = {
+                    path: canonicalPath,
+                    image: canvas,
+                    width: 64,
+                    height: 64,
+                    data: ctx.getImageData(0, 0, 64, 64),
+                };
+                textureState.textureMap.set(canonicalPath, textureData);
+            }
+            
+            textures.push({
+                path: canonicalPath,
+                group: group,
+                width: textureData.width,
+                height: textureData.height,
+                image: textureData.image,
+            });
+            
+            totalArea += textureData.width * textureData.height;
+        }
+        
+        // Estimate atlas size (add padding)
+        const padding = 2;
+        const estimatedSize = Math.ceil(Math.sqrt(totalArea * 1.2)); // 20% overhead
+        const atlasSize = Math.pow(2, Math.ceil(Math.log2(estimatedSize))); // Power of 2
+        
+        // Create atlas canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.min(atlasSize, 4096); // Max 4096
+        canvas.height = Math.min(atlasSize, 4096);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Pack textures using simple bin packing
+        const mapping = new Map(); // original path -> {x, y, width, height, canonical}
+        let currentX = padding;
+        let currentY = padding;
+        let maxHeight = 0;
+        
+        for (const texture of textures) {
+            if (currentX + texture.width + padding > canvas.width) {
+                currentX = padding;
+                currentY += maxHeight + padding;
+                maxHeight = 0;
+            }
+            
+            if (currentY + texture.height + padding > canvas.height) {
+                console.warn('Atlas too small, some textures may be cut off');
+                break;
+            }
+            
+            // Draw texture to atlas
+            ctx.drawImage(texture.image, currentX, currentY);
+            
+            // Store mapping for all textures in group
+            for (const path of texture.group) {
+                mapping.set(path, {
+                    x: currentX,
+                    y: currentY,
+                    width: texture.width,
+                    height: texture.height,
+                    canonical: texture.path,
+                });
+            }
+            
+            currentX += texture.width + padding;
+            maxHeight = Math.max(maxHeight, texture.height);
+        }
+        
+        return { canvas, mapping, width: canvas.width, height: canvas.height };
+    }
+
+    function updateModelsWithAtlas(models, textureGroups, atlasMapping) {
+        const optimized = [];
+        
+        for (const { file, model, name } of models) {
+            const optimizedModel = JSON.parse(JSON.stringify(model));
+            
+            // Update texture references
+            if (optimizedModel.textures && typeof optimizedModel.textures === 'object') {
+                for (const key in optimizedModel.textures) {
+                    const originalPath = optimizedModel.textures[key];
+                    if (typeof originalPath === 'string') {
+                        const mapping = atlasMapping.get(originalPath.trim());
+                        if (mapping) {
+                            // Update to use atlas coordinates
+                            optimizedModel.textures[key] = `#${key}`; // Use texture variable
+                            // Store UV mapping in model metadata or separate file
+                        }
+                    }
+                }
+            }
+            
+            optimized.push({
+                name: name,
+                model: optimizedModel,
+                originalFile: file,
+            });
+        }
+        
+        return optimized;
+    }
+
+    async function createOptimizedZip(optimizedModels, atlasCanvas) {
+        if (typeof JSZip === "undefined") {
+            throw new Error("JSZip não está disponível.");
+        }
+        
+        const zip = new JSZip();
+        
+        // Add optimized models
+        const modelsFolder = zip.folder("models");
+        for (const optModel of optimizedModels) {
+            modelsFolder.file(optModel.name, JSON.stringify(optModel.model, null, 2));
+        }
+        
+        // Add atlas texture
+        const texturesFolder = zip.folder("textures");
+        return new Promise((resolve, reject) => {
+            atlasCanvas.toBlob((blob) => {
+                if (!blob) {
+                    reject(new Error("Falha ao criar blob do atlas"));
+                    return;
+                }
+                // Convert blob to base64 for JSZip
+                const reader = new FileReader();
+                reader.onload = () => {
+                    texturesFolder.file("atlas.png", reader.result.split(',')[1], { base64: true });
+                    zip.generateAsync({ type: "blob" }).then(resolve).catch(reject);
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            }, 'image/png');
+        });
+    }
+
+    function triggerTextureDownload() {
+        if (!textureState.atlasBlob) return;
+        
+        const url = URL.createObjectURL(textureState.atlasBlob);
+        const anchor = document.createElement("a");
+        const dateStamp = new Date().toISOString().split("T")[0];
+        anchor.href = url;
+        anchor.download = `erisia-textures-optimized-${dateStamp}.zip`;
+        anchor.click();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+    }
+
+    function renderTexturePreview(container, stats) {
+        if (!container) return;
+        
+        container.innerHTML = "";
+        
+        const statsDiv = document.createElement("div");
+        statsDiv.style.cssText = "display: grid; gap: 0.75rem; padding: 1rem; background: rgba(6, 10, 18, 0.9); border: 1px solid rgba(224, 160, 48, 0.25);";
+        
+        const title = document.createElement("h4");
+        title.textContent = "Estatísticas da Otimização";
+        title.style.cssText = "margin: 0 0 0.5rem; font-size: clamp(0.7rem, 1.2vw, 0.9rem); color: var(--color-accent-strong);";
+        statsDiv.appendChild(title);
+        
+        const statsList = document.createElement("ul");
+        statsList.style.cssText = "margin: 0; padding-left: 1.5rem; list-style: disc;";
+        
+        const items = [
+            `Modelos processados: ${stats.modelsProcessed}`,
+            `Texturas originais: ${stats.texturesOriginal}`,
+            `Texturas únicas: ${stats.texturesUnique}`,
+            `Texturas economizadas: ${stats.texturesSaved}`,
+            `Tamanho do atlas: ${stats.atlasSize}`,
+        ];
+        
+        items.forEach(item => {
+            const li = document.createElement("li");
+            li.textContent = item;
+            li.style.cssText = "font-size: clamp(0.55rem, 0.95vw, 0.8rem); color: var(--color-muted); margin: 0.25rem 0;";
+            statsList.appendChild(li);
+        });
+        
+        statsDiv.appendChild(statsList);
+        container.appendChild(statsDiv);
+        
+        // Add note about texture loading
+        const note = document.createElement("p");
+        note.textContent = "Nota: Para carregar texturas reais, forneça os arquivos de textura junto com os modelos ou configure o caminho das texturas.";
+        note.style.cssText = "margin: 1rem 0 0; padding: 0.75rem; background: rgba(224, 160, 48, 0.1); border-left: 3px solid var(--color-accent); font-size: clamp(0.5rem, 0.85vw, 0.7rem); color: var(--color-muted);";
+        container.appendChild(note);
+    }
+
+    refreshTextureState();
 }
