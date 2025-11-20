@@ -1208,16 +1208,35 @@ if (textureOptimizerSection) {
             const models = [];
             const texturePaths = new Set();
             
+            console.log(`Processando ${textureState.modelFiles.length} arquivo(s) .bbmodel...`);
+            
             for (const file of textureState.modelFiles) {
                 try {
                     const text = await file.text();
+                    if (!text || text.trim().length === 0) {
+                        throw new Error("Arquivo vazio");
+                    }
+                    
                     const model = JSON.parse(text);
+                    
+                    // Validate it's a Blockbench model
+                    if (!model.format_version && !model.meta && !model.elements) {
+                        console.warn(`${file.name} pode não ser um arquivo .bbmodel válido`);
+                    }
+                    
+                    const textureCountBefore = texturePaths.size;
                     models.push({ file, model, name: file.name });
                     
                     // Extract texture paths from model
                     extractTexturePaths(model, texturePaths);
+                    const texturesFound = texturePaths.size - textureCountBefore;
+                    console.log(`Modelo ${file.name} processado. ${texturesFound} textura(s) encontrada(s).`);
                 } catch (error) {
                     console.error(`Erro ao ler ${file.name}:`, error);
+                    const errorMsg = error.message || String(error);
+                    updateFeedbackElement(optimizeFeedback, `Erro ao ler ${file.name}: ${errorMsg}`, "error");
+                    // Continue processing other files instead of throwing
+                    continue;
                 }
             }
 
@@ -1226,28 +1245,76 @@ if (textureOptimizerSection) {
                 return;
             }
 
+            console.log(`Total de texturas encontradas: ${texturePaths.size}`, Array.from(texturePaths));
+            
+            if (texturePaths.size === 0) {
+                updateFeedbackElement(optimizeFeedback, "Nenhuma textura foi encontrada nos modelos. Verifique se os modelos têm referências de textura.", "error");
+                return;
+            }
+
             updateFeedbackElement(optimizeFeedback, `Carregando ${texturePaths.size} textura${texturePaths.size === 1 ? "" : "s"}...`, "info");
 
             // Load all textures
-            const textureData = await loadTextures(texturePaths, textureState.modelFiles);
+            let textureData;
+            try {
+                textureData = await loadTextures(texturePaths, textureState.modelFiles);
+                console.log(`Texturas carregadas: ${textureData.size}`);
+            } catch (error) {
+                console.error("Erro ao carregar texturas:", error);
+                updateFeedbackElement(optimizeFeedback, `Erro ao carregar texturas: ${error.message}`, "error");
+                throw error;
+            }
             
             updateFeedbackElement(optimizeFeedback, "Detectando texturas duplicadas...", "info");
 
             // Group similar textures
-            const textureGroups = groupSimilarTextures(textureData);
+            let textureGroups;
+            try {
+                textureGroups = groupSimilarTextures(textureData);
+                console.log(`Grupos de texturas criados: ${textureGroups.size}`);
+            } catch (error) {
+                console.error("Erro ao agrupar texturas:", error);
+                updateFeedbackElement(optimizeFeedback, `Erro ao agrupar texturas: ${error.message}`, "error");
+                throw error;
+            }
             
             updateFeedbackElement(optimizeFeedback, "Criando atlas de texturas...", "info");
 
             // Create texture atlas
-            const atlasResult = await createTextureAtlas(textureGroups);
+            let atlasResult;
+            try {
+                atlasResult = await createTextureAtlas(textureGroups, textureData);
+                console.log(`Atlas criado: ${atlasResult.width}x${atlasResult.height}`);
+            } catch (error) {
+                console.error("Erro ao criar atlas:", error);
+                updateFeedbackElement(optimizeFeedback, `Erro ao criar atlas: ${error.message}`, "error");
+                throw error;
+            }
             
             updateFeedbackElement(optimizeFeedback, "Atualizando modelos...", "info");
 
             // Update models with atlas references
-            const optimizedModels = updateModelsWithAtlas(models, textureGroups, atlasResult.mapping);
+            let optimizedModels;
+            try {
+                optimizedModels = updateModelsWithAtlas(models, textureGroups, atlasResult.mapping);
+                console.log(`Modelos otimizados: ${optimizedModels.length}`);
+            } catch (error) {
+                console.error("Erro ao atualizar modelos:", error);
+                updateFeedbackElement(optimizeFeedback, `Erro ao atualizar modelos: ${error.message}`, "error");
+                throw error;
+            }
             
             // Create ZIP with optimized models and atlas
-            const zipBlob = await createOptimizedZip(optimizedModels, atlasResult.canvas);
+            let zipBlob;
+            try {
+                zipBlob = await createOptimizedZip(optimizedModels, atlasResult.canvas);
+                console.log("ZIP criado com sucesso");
+            } catch (error) {
+                console.error("Erro ao criar ZIP:", error);
+                updateFeedbackElement(optimizeFeedback, `Erro ao criar ZIP: ${error.message}`, "error");
+                throw error;
+            }
+            
             textureState.atlasBlob = zipBlob;
             textureState.optimizedModels = optimizedModels;
 
@@ -1268,7 +1335,9 @@ if (textureOptimizerSection) {
             updateFeedbackElement(optimizeFeedback, "Otimização concluída! Revise os resultados abaixo.", "success");
         } catch (error) {
             console.error("Erro ao otimizar texturas:", error);
-            updateFeedbackElement(optimizeFeedback, "Erro ao otimizar texturas. Verifique o console para detalhes.", "error");
+            console.error("Stack trace:", error.stack);
+            const errorMessage = error.message || "Erro desconhecido";
+            updateFeedbackElement(optimizeFeedback, `Erro: ${errorMessage}. Verifique o console (F12) para mais detalhes.`, "error");
         } finally {
             isProcessingTextures = false;
             if (textureOptimizerSection) {
@@ -1279,14 +1348,37 @@ if (textureOptimizerSection) {
     }
 
     function extractTexturePaths(model, texturePaths) {
-        if (!model || typeof model !== 'object') return;
+        if (!model || typeof model !== 'object') {
+            console.warn("Modelo inválido ou vazio");
+            return;
+        }
         
         // Blockbench models store textures in various places
+        // Format 1: Object with named textures
         if (model.textures && typeof model.textures === 'object') {
-            for (const key in model.textures) {
-                const texture = model.textures[key];
-                if (typeof texture === 'string' && texture.trim()) {
-                    texturePaths.add(texture.trim());
+            if (Array.isArray(model.textures)) {
+                // Array format
+                model.textures.forEach((texture, index) => {
+                    if (typeof texture === 'string' && texture.trim()) {
+                        texturePaths.add(texture.trim());
+                    } else if (texture && typeof texture === 'object' && texture.path) {
+                        texturePaths.add(String(texture.path).trim());
+                    }
+                });
+            } else {
+                // Object format
+                for (const key in model.textures) {
+                    const texture = model.textures[key];
+                    if (typeof texture === 'string' && texture.trim()) {
+                        texturePaths.add(texture.trim());
+                    } else if (texture && typeof texture === 'object') {
+                        // Can be {path: "...", ...} or {uuid: "...", ...}
+                        if (texture.path && typeof texture.path === 'string') {
+                            texturePaths.add(texture.path.trim());
+                        } else if (typeof texture === 'string') {
+                            texturePaths.add(texture.trim());
+                        }
+                    }
                 }
             }
         }
@@ -1294,7 +1386,7 @@ if (textureOptimizerSection) {
         // Also check elements for texture references
         if (Array.isArray(model.elements)) {
             model.elements.forEach(element => {
-                if (element.faces && typeof element.faces === 'object') {
+                if (element && element.faces && typeof element.faces === 'object') {
                     for (const faceKey in element.faces) {
                         const face = element.faces[faceKey];
                         if (face && face.texture !== undefined) {
@@ -1305,60 +1397,139 @@ if (textureOptimizerSection) {
                                     const tex = model.textures[texRef];
                                     if (typeof tex === 'string') {
                                         texturePaths.add(tex.trim());
+                                    } else if (tex && typeof tex === 'object' && tex.path) {
+                                        texturePaths.add(String(tex.path).trim());
                                     }
                                 }
                             } else if (typeof texRef === 'string') {
                                 texturePaths.add(texRef.trim());
+                            } else if (texRef && typeof texRef === 'object' && texRef.path) {
+                                texturePaths.add(String(texRef.path).trim());
                             }
                         }
                     }
                 }
             });
         }
+        
+        // Check for texture references in outliner (Blockbench structure)
+        if (model.outliner && Array.isArray(model.outliner)) {
+            function traverseOutliner(items) {
+                for (const item of items) {
+                    if (item && typeof item === 'object') {
+                        if (item.texture !== undefined) {
+                            const texRef = item.texture;
+                            if (typeof texRef === 'string') {
+                                texturePaths.add(texRef.trim());
+                            } else if (typeof texRef === 'number' && model.textures) {
+                                const tex = Array.isArray(model.textures) ? model.textures[texRef] : null;
+                                if (tex && typeof tex === 'string') {
+                                    texturePaths.add(tex.trim());
+                                }
+                            }
+                        }
+                        if (item.children && Array.isArray(item.children)) {
+                            traverseOutliner(item.children);
+                        }
+                    }
+                }
+            }
+            traverseOutliner(model.outliner);
+        }
     }
 
     async function loadTextures(texturePaths, modelFiles) {
         const textureData = new Map();
         const loadedTextures = new Set();
+        let loadedCount = 0;
+        let placeholderCount = 0;
+        
+        console.log(`Tentando carregar ${texturePaths.size} textura(s)...`);
+        console.log("Caminhos de texturas:", Array.from(texturePaths));
+        console.log("Arquivos disponíveis:", modelFiles.map(f => f.name || f.webkitRelativePath || 'unknown'));
         
         // Create a file map from model files for texture lookup
         const fileMap = new Map();
+        const allFiles = []; // Store all files for searching
+        
+        // Collect all files from FileList/File array
         for (const modelFile of modelFiles) {
             const relativePath = normalizePath(getRelativePath(modelFile));
             const fileName = relativePath.split('/').pop() || modelFile.name;
             fileMap.set(fileName.toLowerCase(), modelFile);
+            allFiles.push(modelFile);
         }
         
         // Try to load each texture
         for (const texturePath of texturePaths) {
-            if (loadedTextures.has(texturePath)) continue;
+            if (loadedTextures.has(texturePath)) {
+                console.log(`Textura ${texturePath} já carregada, pulando...`);
+                continue;
+            }
             
             let textureImage = null;
             let loaded = false;
+            let loadError = null;
+            
+            // Clean texture path (remove # prefix if present, common in Blockbench)
+            const cleanPath = texturePath.replace(/^#/, '').trim();
             
             // Try to load texture as image
             try {
                 // First, try to create image from path (if it's a data URL or absolute URL)
-                if (texturePath.startsWith('data:') || texturePath.startsWith('http://') || texturePath.startsWith('https://')) {
-                    textureImage = await loadImageFromURL(texturePath);
+                if (cleanPath.startsWith('data:') || cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
+                    textureImage = await loadImageFromURL(cleanPath);
                     loaded = true;
+                    loadedCount++;
+                    console.log(`Textura carregada de URL: ${cleanPath}`);
                 } else {
                     // Try to find texture file in the dropped files
-                    const textureFileName = texturePath.split('/').pop() || texturePath;
-                    const textureFile = Array.from(modelFiles).find(f => {
-                        const name = (f.webkitRelativePath || f.name || '').toLowerCase();
-                        return name.includes(textureFileName.toLowerCase()) || 
-                               (name.endsWith('.png') && name.includes(texturePath.toLowerCase().replace(/\.(png|jpg|jpeg)$/i, '')));
-                    });
+                    const textureFileName = cleanPath.split('/').pop() || cleanPath;
+                    const textureBaseName = textureFileName.replace(/\.(png|jpg|jpeg)$/i, '').toLowerCase();
+                    
+                    // Search for matching file
+                    let textureFile = null;
+                    for (const file of allFiles) {
+                        const name = (file.webkitRelativePath || file.name || '').toLowerCase();
+                        const baseName = name.replace(/\.(png|jpg|jpeg|bbmodel)$/i, '');
+                        
+                        // Try exact match first
+                        if (name === textureFileName.toLowerCase() || name === cleanPath.toLowerCase()) {
+                            textureFile = file;
+                            break;
+                        }
+                        
+                        // Try base name match
+                        if (baseName === textureBaseName && (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg'))) {
+                            textureFile = file;
+                            break;
+                        }
+                        
+                        // Try partial match
+                        if (name.includes(textureBaseName) && (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg'))) {
+                            textureFile = file;
+                            break;
+                        }
+                    }
                     
                     if (textureFile) {
-                        const url = URL.createObjectURL(textureFile);
-                        textureImage = await loadImageFromURL(url);
-                        URL.revokeObjectURL(url);
-                        loaded = true;
+                        try {
+                            const url = URL.createObjectURL(textureFile);
+                            textureImage = await loadImageFromURL(url);
+                            URL.revokeObjectURL(url);
+                            loaded = true;
+                            loadedCount++;
+                            console.log(`Textura carregada de arquivo: ${textureFile.name} (para ${texturePath})`);
+                        } catch (err) {
+                            loadError = err;
+                            console.warn(`Erro ao carregar textura do arquivo ${textureFile.name}:`, err);
+                        }
+                    } else {
+                        console.warn(`Arquivo de textura não encontrado: ${texturePath} (procurou por: ${textureFileName})`);
                     }
                 }
             } catch (error) {
+                loadError = error;
                 console.warn(`Não foi possível carregar textura ${texturePath}:`, error);
             }
             
@@ -1378,12 +1549,15 @@ if (textureOptimizerSection) {
                 ctx.fillText(shortPath, 32, 42);
                 
                 textureImage = canvas;
+                placeholderCount++;
             }
             
             // Get image data
             const canvas = document.createElement('canvas');
-            canvas.width = textureImage.width || textureImage.naturalWidth || 64;
-            canvas.height = textureImage.height || textureImage.naturalHeight || 64;
+            const imgWidth = textureImage.width || textureImage.naturalWidth || 64;
+            const imgHeight = textureImage.height || textureImage.naturalHeight || 64;
+            canvas.width = imgWidth;
+            canvas.height = imgHeight;
             const ctx = canvas.getContext('2d');
             ctx.drawImage(textureImage, 0, 0);
             
@@ -1401,6 +1575,8 @@ if (textureOptimizerSection) {
             
             loadedTextures.add(texturePath);
         }
+        
+        console.log(`Texturas carregadas: ${loadedCount} reais, ${placeholderCount} placeholders`);
         
         return textureData;
     }
@@ -1483,24 +1659,23 @@ if (textureOptimizerSection) {
         return false;
     }
 
-    async function createTextureAtlas(textureGroups) {
+    async function createTextureAtlas(textureGroups, textureDataMap) {
         // Calculate atlas size
         let totalArea = 0;
         const textures = [];
         
-        // First, we need to ensure textureMap is populated
-        // This should have been done in loadTextures, but let's be safe
-        if (textureState.textureMap.size === 0) {
-            // Re-populate from textureGroups if needed
-            for (const [canonicalPath] of textureGroups.entries()) {
-                // Try to get from a global texture cache if available
-                // For now, we'll need to reload or use placeholder
-            }
+        // Use the textureDataMap passed as parameter, fallback to textureState.textureMap
+        const sourceMap = textureDataMap || textureState.textureMap;
+        
+        if (sourceMap.size === 0) {
+            throw new Error("Nenhuma textura foi carregada. Verifique se as texturas estão acessíveis.");
         }
         
         for (const [canonicalPath, group] of textureGroups.entries()) {
-            const textureData = textureState.textureMap.get(canonicalPath);
+            let textureData = sourceMap.get(canonicalPath);
+            
             if (!textureData) {
+                console.warn(`Textura ${canonicalPath} não encontrada no mapa, criando placeholder...`);
                 // Create placeholder if missing
                 const canvas = document.createElement('canvas');
                 canvas.width = 64;
@@ -1516,7 +1691,11 @@ if (textureOptimizerSection) {
                     height: 64,
                     data: ctx.getImageData(0, 0, 64, 64),
                 };
-                textureState.textureMap.set(canonicalPath, textureData);
+                sourceMap.set(canonicalPath, textureData);
+            }
+            
+            if (!textureData.image) {
+                throw new Error(`Textura ${canonicalPath} não tem imagem válida.`);
             }
             
             textures.push({
@@ -1528,6 +1707,10 @@ if (textureOptimizerSection) {
             });
             
             totalArea += textureData.width * textureData.height;
+        }
+        
+        if (textures.length === 0) {
+            throw new Error("Nenhuma textura válida para criar o atlas.");
         }
         
         // Estimate atlas size (add padding)
@@ -1615,7 +1798,15 @@ if (textureOptimizerSection) {
 
     async function createOptimizedZip(optimizedModels, atlasCanvas) {
         if (typeof JSZip === "undefined") {
-            throw new Error("JSZip não está disponível.");
+            throw new Error("JSZip não está disponível. Certifique-se de que a biblioteca JSZip foi carregada.");
+        }
+        
+        if (!atlasCanvas) {
+            throw new Error("Canvas do atlas não foi fornecido.");
+        }
+        
+        if (!optimizedModels || optimizedModels.length === 0) {
+            throw new Error("Nenhum modelo otimizado para incluir no ZIP.");
         }
         
         const zip = new JSZip();
@@ -1623,26 +1814,59 @@ if (textureOptimizerSection) {
         // Add optimized models
         const modelsFolder = zip.folder("models");
         for (const optModel of optimizedModels) {
-            modelsFolder.file(optModel.name, JSON.stringify(optModel.model, null, 2));
+            if (!optModel.name || !optModel.model) {
+                console.warn("Modelo inválido ignorado:", optModel);
+                continue;
+            }
+            try {
+                const modelJson = JSON.stringify(optModel.model, null, 2);
+                modelsFolder.file(optModel.name, modelJson);
+            } catch (error) {
+                console.error(`Erro ao serializar modelo ${optModel.name}:`, error);
+                throw new Error(`Erro ao processar modelo ${optModel.name}: ${error.message}`);
+            }
         }
         
         // Add atlas texture
         const texturesFolder = zip.folder("textures");
         return new Promise((resolve, reject) => {
-            atlasCanvas.toBlob((blob) => {
-                if (!blob) {
-                    reject(new Error("Falha ao criar blob do atlas"));
-                    return;
-                }
-                // Convert blob to base64 for JSZip
-                const reader = new FileReader();
-                reader.onload = () => {
-                    texturesFolder.file("atlas.png", reader.result.split(',')[1], { base64: true });
-                    zip.generateAsync({ type: "blob" }).then(resolve).catch(reject);
-                };
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
-            }, 'image/png');
+            try {
+                atlasCanvas.toBlob((blob) => {
+                    if (!blob) {
+                        reject(new Error("Falha ao criar blob do atlas. O canvas pode estar vazio ou corrompido."));
+                        return;
+                    }
+                    // Convert blob to base64 for JSZip
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        try {
+                            const base64Data = reader.result.split(',')[1];
+                            if (!base64Data) {
+                                reject(new Error("Falha ao converter atlas para base64."));
+                                return;
+                            }
+                            texturesFolder.file("atlas.png", base64Data, { base64: true });
+                            zip.generateAsync({ type: "blob" })
+                                .then(resolve)
+                                .catch(err => {
+                                    console.error("Erro ao gerar ZIP:", err);
+                                    reject(new Error(`Erro ao gerar arquivo ZIP: ${err.message}`));
+                                });
+                        } catch (error) {
+                            console.error("Erro ao processar blob do atlas:", error);
+                            reject(new Error(`Erro ao processar atlas: ${error.message}`));
+                        }
+                    };
+                    reader.onerror = (err) => {
+                        console.error("Erro no FileReader:", err);
+                        reject(new Error("Erro ao ler blob do atlas."));
+                    };
+                    reader.readAsDataURL(blob);
+                }, 'image/png');
+            } catch (error) {
+                console.error("Erro ao criar blob do canvas:", error);
+                reject(new Error(`Erro ao criar blob: ${error.message}`));
+            }
         });
     }
 
