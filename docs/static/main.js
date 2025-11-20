@@ -1248,7 +1248,28 @@ if (textureOptimizerSection) {
             console.log(`Total de texturas encontradas: ${texturePaths.size}`, Array.from(texturePaths));
             
             if (texturePaths.size === 0) {
-                updateFeedbackElement(optimizeFeedback, "Nenhuma textura foi encontrada nos modelos. Verifique se os modelos têm referências de textura.", "error");
+                // Log model structure for debugging
+                console.error("=== DEBUG: Estrutura dos modelos ===");
+                models.forEach((m, idx) => {
+                    console.log(`\nModelo ${idx + 1}: ${m.name}`);
+                    console.log("Chaves principais:", Object.keys(m.model));
+                    console.log("Tem textures?", !!m.model.textures);
+                    console.log("Tipo de textures:", typeof m.model.textures);
+                    if (m.model.textures) {
+                        console.log("Conteúdo de textures:", m.model.textures);
+                    }
+                    console.log("Tem elements?", !!m.model.elements);
+                    console.log("Número de elements:", Array.isArray(m.model.elements) ? m.model.elements.length : 0);
+                    if (m.model.elements && m.model.elements.length > 0) {
+                        console.log("Primeiro element:", m.model.elements[0]);
+                    }
+                    console.log("Tem outliner?", !!m.model.outliner);
+                    console.log("Format version:", m.model.format_version);
+                    console.log("Meta:", m.model.meta);
+                });
+                console.error("=== FIM DEBUG ===");
+                
+                updateFeedbackElement(optimizeFeedback, "Nenhuma textura foi encontrada nos modelos. Verifique o console (F12) para ver a estrutura dos modelos e verifique se os modelos têm referências de textura válidas.", "error");
                 return;
             }
 
@@ -1353,58 +1374,101 @@ if (textureOptimizerSection) {
             return;
         }
         
-        // Blockbench models store textures in various places
-        // Format 1: Object with named textures
-        if (model.textures && typeof model.textures === 'object') {
+        const foundTextures = new Set();
+        
+        // Log model structure for debugging
+        console.log("Estrutura do modelo:", {
+            hasTextures: !!model.textures,
+            texturesType: model.textures ? typeof model.textures : 'none',
+            isTexturesArray: Array.isArray(model.textures),
+            hasElements: !!model.elements,
+            elementsCount: Array.isArray(model.elements) ? model.elements.length : 0,
+            hasOutliner: !!model.outliner,
+            formatVersion: model.format_version,
+            meta: model.meta ? { name: model.meta.name, version: model.meta.version } : null
+        });
+        
+        // Method 1: Direct textures object/array
+        if (model.textures) {
             if (Array.isArray(model.textures)) {
-                // Array format
+                // Array format - common in newer Blockbench versions
                 model.textures.forEach((texture, index) => {
                     if (typeof texture === 'string' && texture.trim()) {
-                        texturePaths.add(texture.trim());
-                    } else if (texture && typeof texture === 'object' && texture.path) {
-                        texturePaths.add(String(texture.path).trim());
+                        foundTextures.add(texture.trim());
+                    } else if (texture && typeof texture === 'object') {
+                        // Can be {path: "...", source: "...", id: "...", ...}
+                        if (texture.path && typeof texture.path === 'string') {
+                            foundTextures.add(String(texture.path).trim());
+                        }
+                        if (texture.source && typeof texture.source === 'string') {
+                            foundTextures.add(String(texture.source).trim());
+                        }
+                        if (texture.id && typeof texture.id === 'string') {
+                            foundTextures.add(String(texture.id).trim());
+                        }
+                        // Some formats use 'name' or 'texture'
+                        if (texture.name && typeof texture.name === 'string') {
+                            foundTextures.add(String(texture.name).trim());
+                        }
+                        if (texture.texture && typeof texture.texture === 'string') {
+                            foundTextures.add(String(texture.texture).trim());
+                        }
                     }
                 });
-            } else {
-                // Object format
+            } else if (typeof model.textures === 'object') {
+                // Object format - common in older Blockbench versions
                 for (const key in model.textures) {
                     const texture = model.textures[key];
                     if (typeof texture === 'string' && texture.trim()) {
-                        texturePaths.add(texture.trim());
+                        foundTextures.add(texture.trim());
                     } else if (texture && typeof texture === 'object') {
-                        // Can be {path: "...", ...} or {uuid: "...", ...}
+                        // Can be {path: "...", source: "...", id: "...", ...}
                         if (texture.path && typeof texture.path === 'string') {
-                            texturePaths.add(texture.path.trim());
-                        } else if (typeof texture === 'string') {
-                            texturePaths.add(texture.trim());
+                            foundTextures.add(String(texture.path).trim());
+                        }
+                        if (texture.source && typeof texture.source === 'string') {
+                            foundTextures.add(String(texture.source).trim());
+                        }
+                        if (texture.id && typeof texture.id === 'string') {
+                            foundTextures.add(String(texture.id).trim());
+                        }
+                        // Some formats use the key as texture name
+                        if (!texture.path && !texture.source && !texture.id) {
+                            foundTextures.add(key.trim());
                         }
                     }
                 }
             }
         }
         
-        // Also check elements for texture references
+        // Method 2: Check elements for texture references
         if (Array.isArray(model.elements)) {
-            model.elements.forEach(element => {
+            model.elements.forEach((element, elemIndex) => {
                 if (element && element.faces && typeof element.faces === 'object') {
                     for (const faceKey in element.faces) {
                         const face = element.faces[faceKey];
-                        if (face && face.texture !== undefined) {
+                        if (face && face.texture !== undefined && face.texture !== null) {
                             const texRef = face.texture;
+                            
                             if (typeof texRef === 'number') {
                                 // Texture index reference
                                 if (model.textures && Array.isArray(model.textures)) {
                                     const tex = model.textures[texRef];
                                     if (typeof tex === 'string') {
-                                        texturePaths.add(tex.trim());
-                                    } else if (tex && typeof tex === 'object' && tex.path) {
-                                        texturePaths.add(String(tex.path).trim());
+                                        foundTextures.add(tex.trim());
+                                    } else if (tex && typeof tex === 'object') {
+                                        if (tex.path) foundTextures.add(String(tex.path).trim());
+                                        if (tex.source) foundTextures.add(String(tex.source).trim());
+                                        if (tex.id) foundTextures.add(String(tex.id).trim());
                                     }
                                 }
                             } else if (typeof texRef === 'string') {
-                                texturePaths.add(texRef.trim());
-                            } else if (texRef && typeof texRef === 'object' && texRef.path) {
-                                texturePaths.add(String(texRef.path).trim());
+                                foundTextures.add(texRef.trim());
+                            } else if (texRef && typeof texRef === 'object') {
+                                if (texRef.path) foundTextures.add(String(texRef.path).trim());
+                                if (texRef.source) foundTextures.add(String(texRef.source).trim());
+                                if (texRef.id) foundTextures.add(String(texRef.id).trim());
+                                if (texRef.uuid) foundTextures.add(String(texRef.uuid).trim());
                             }
                         }
                     }
@@ -1412,20 +1476,26 @@ if (textureOptimizerSection) {
             });
         }
         
-        // Check for texture references in outliner (Blockbench structure)
+        // Method 3: Check outliner structure (Blockbench hierarchy)
         if (model.outliner && Array.isArray(model.outliner)) {
             function traverseOutliner(items) {
                 for (const item of items) {
                     if (item && typeof item === 'object') {
-                        if (item.texture !== undefined) {
+                        if (item.texture !== undefined && item.texture !== null) {
                             const texRef = item.texture;
                             if (typeof texRef === 'string') {
-                                texturePaths.add(texRef.trim());
+                                foundTextures.add(texRef.trim());
                             } else if (typeof texRef === 'number' && model.textures) {
-                                const tex = Array.isArray(model.textures) ? model.textures[texRef] : null;
-                                if (tex && typeof tex === 'string') {
-                                    texturePaths.add(tex.trim());
+                                const tex = Array.isArray(model.textures) ? model.textures[texRef] : model.textures[texRef];
+                                if (typeof tex === 'string') {
+                                    foundTextures.add(tex.trim());
+                                } else if (tex && typeof tex === 'object') {
+                                    if (tex.path) foundTextures.add(String(tex.path).trim());
+                                    if (tex.source) foundTextures.add(String(tex.source).trim());
                                 }
+                            } else if (texRef && typeof texRef === 'object') {
+                                if (texRef.path) foundTextures.add(String(texRef.path).trim());
+                                if (texRef.source) foundTextures.add(String(texRef.source).trim());
                             }
                         }
                         if (item.children && Array.isArray(item.children)) {
@@ -1436,6 +1506,69 @@ if (textureOptimizerSection) {
             }
             traverseOutliner(model.outliner);
         }
+        
+        // Method 4: Check for texture_maps (some Blockbench formats)
+        if (model.texture_maps && typeof model.texture_maps === 'object') {
+            for (const key in model.texture_maps) {
+                const map = model.texture_maps[key];
+                if (typeof map === 'string') {
+                    foundTextures.add(map.trim());
+                } else if (map && typeof map === 'object' && map.path) {
+                    foundTextures.add(String(map.path).trim());
+                }
+            }
+        }
+        
+        // Method 5: Deep search for texture-like strings in the entire model
+        // This is a fallback for unusual formats
+        function deepSearchForTextures(obj, depth = 0) {
+            if (depth > 5) return; // Limit recursion depth
+            
+            if (typeof obj === 'string') {
+                // Check if it looks like a texture path
+                const str = obj.trim();
+                if (str && (
+                    str.endsWith('.png') || 
+                    str.endsWith('.jpg') || 
+                    str.endsWith('.jpeg') ||
+                    str.startsWith('#') ||
+                    str.includes('/') ||
+                    str.includes('\\')
+                )) {
+                    // Skip data URLs and very long strings
+                    if (!str.startsWith('data:') && str.length < 500) {
+                        foundTextures.add(str);
+                    }
+                }
+            } else if (Array.isArray(obj)) {
+                obj.forEach(item => deepSearchForTextures(item, depth + 1));
+            } else if (obj && typeof obj === 'object') {
+                for (const key in obj) {
+                    // Skip certain keys that are definitely not textures
+                    if (key === 'uuid' || key === 'name' || key === 'type' || key === 'origin' || key === 'rotation') {
+                        continue;
+                    }
+                    deepSearchForTextures(obj[key], depth + 1);
+                }
+            }
+        }
+        
+        // Only do deep search if we haven't found any textures yet
+        if (foundTextures.size === 0) {
+            console.log("Nenhuma textura encontrada pelos métodos padrão, fazendo busca profunda...");
+            deepSearchForTextures(model);
+        }
+        
+        // Add all found textures to the set
+        foundTextures.forEach(tex => {
+            // Remove # prefix if present (Blockbench texture variable syntax)
+            const cleanTex = tex.replace(/^#/, '').trim();
+            if (cleanTex) {
+                texturePaths.add(cleanTex);
+            }
+        });
+        
+        console.log(`Texturas encontradas neste modelo: ${foundTextures.size}`, Array.from(foundTextures));
     }
 
     async function loadTextures(texturePaths, modelFiles) {
