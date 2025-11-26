@@ -115,15 +115,18 @@ async function processConverterFiles(files) {
 
         showConverterFeedback(`Detectado: ${structure.type.toUpperCase()}. Convertendo arquivos...`, "info");
 
-        // Converter itens
-        const convertedItems = await convertItems(files, structure);
-        
-        // Processar resource pack se existir
+        // Processar resource pack primeiro para mapear modelos
         let resourcePack = null;
+        let modelMap = {};
         if (structure.hasPack) {
             showConverterFeedback("Processando resource pack...", "info");
-            resourcePack = await processResourcePack(files, structure);
+            const packResult = await processResourcePack(files, structure);
+            resourcePack = packResult.files;
+            modelMap = packResult.modelMap || {};
         }
+
+        // Converter itens (agora com acesso ao modelMap)
+        const convertedItems = await convertItems(files, structure, modelMap);
 
         convertedFiles = {
             type: structure.type,
@@ -192,12 +195,12 @@ function analyzeStructure(files) {
     return structure;
 }
 
-async function convertItems(files, structure) {
+async function convertItems(files, structure, modelMap = {}) {
     const converted = {};
     const itemsFiles = files.filter(f => {
         const path = getRelativePath(f).toLowerCase();
         return (path.includes("/items/") || path.startsWith("items/")) && 
-               f.name.endsWith(".yml") || f.name.endsWith(".yaml");
+               (f.name.endsWith(".yml") || f.name.endsWith(".yaml"));
     });
 
     for (const file of itemsFiles) {
@@ -217,9 +220,9 @@ async function convertItems(files, structure) {
 
             // Converter usando o conversor apropriado
             if (structure.type === "oraxen") {
-                convertOraxenItems(sourceConfig, outputConfig.items, file.name);
+                convertOraxenItems(sourceConfig, outputConfig.items, file.name, modelMap);
             } else {
-                convertNexoItems(sourceConfig, outputConfig.items, file.name);
+                convertNexoItems(sourceConfig, outputConfig.items, file.name, modelMap);
             }
 
             // Determinar caminho de saída
@@ -241,7 +244,7 @@ async function convertItems(files, structure) {
     return converted;
 }
 
-function convertOraxenItems(sourceConfig, outputItems, fileName) {
+function convertOraxenItems(sourceConfig, outputItems, fileName, modelMap = {}) {
     // Obter seção de itens do source
     const sourceItems = sourceConfig.items || sourceConfig;
     
@@ -262,7 +265,7 @@ function convertOraxenItems(sourceConfig, outputItems, fileName) {
 
         // Pack/Resource
         if (itemData.Pack) {
-            convertedItem.resource = convertPack(itemData.Pack, itemData.material || "PAPER", true);
+            convertedItem.resource = convertPack(itemData.Pack, itemData.material || "PAPER", true, itemId, modelMap);
         } else if (itemData.material) {
             convertedItem.resource = {
                 material: itemData.material,
@@ -345,7 +348,7 @@ function convertOraxenItems(sourceConfig, outputItems, fileName) {
     }
 }
 
-function convertNexoItems(sourceConfig, outputItems, fileName) {
+function convertNexoItems(sourceConfig, outputItems, fileName, modelMap = {}) {
     // Similar ao Oraxen, mas com algumas diferenças
     const sourceItems = sourceConfig.items || sourceConfig;
     
@@ -366,7 +369,7 @@ function convertNexoItems(sourceConfig, outputItems, fileName) {
 
         // Pack/Resource
         if (itemData.Pack) {
-            convertedItem.resource = convertPack(itemData.Pack, itemData.material || "PAPER", false);
+            convertedItem.resource = convertPack(itemData.Pack, itemData.material || "PAPER", false, itemId, modelMap);
         }
 
         // Custom Model Data
@@ -431,7 +434,7 @@ function convertNexoItems(sourceConfig, outputItems, fileName) {
     }
 }
 
-function convertPack(pack, material, isOraxen) {
+function convertPack(pack, material, isOraxen, itemId = null, modelMap = {}) {
     const resource = {
         material: material || "PAPER"
     };
@@ -440,9 +443,28 @@ function convertPack(pack, material, isOraxen) {
         if (pack.generate_model === false) {
             resource.generate = false;
             if (pack.model) {
-                resource.model_path = sanitizeNamespacedString(pack.model);
+                // Tentar encontrar o modelo no resource pack primeiro
+                const modelPath = findModelPath(pack.model, itemId, modelMap);
+                resource.model_path = modelPath || sanitizeNamespacedString(pack.model);
+            } else {
+                // Se não tem pack.model mas tem model_path definido, usar
+                if (pack.model_path) {
+                    const modelPath = findModelPath(pack.model_path, itemId, modelMap);
+                    resource.model_path = modelPath || pack.model_path;
+                }
             }
         } else {
+            // Mesmo com generate_model: true, se houver um modelo no resource pack, adicionar model_path
+            if (itemId && modelMap[itemId]) {
+                resource.model_path = modelMap[itemId];
+                resource.generate = false;
+            } else if (pack.model) {
+                const modelPath = findModelPath(pack.model, itemId, modelMap);
+                if (modelPath) {
+                    resource.model_path = modelPath;
+                    resource.generate = false;
+                }
+            }
             resource.generate = true;
             
             if (pack.texture && typeof pack.texture === "string") {
@@ -465,7 +487,9 @@ function convertPack(pack, material, isOraxen) {
         // Nexo
         if (pack.model_path) {
             resource.generate = false;
-            resource.model_path = pack.model_path;
+            // Tentar encontrar o modelo no resource pack primeiro
+            const modelPath = findModelPath(pack.model_path, itemId, modelMap);
+            resource.model_path = modelPath || pack.model_path;
             if (pack.parent_model) {
                 resource.parent = pack.parent_model;
             }
@@ -846,6 +870,7 @@ function setNestedValue(obj, path, value) {
 
 async function processResourcePack(files, structure) {
     const resourcePack = {};
+    const modelMap = {}; // Mapeia itemId -> caminho do modelo
     const validAssetsFolders = ["models", "textures", "font", "lang", "blockstates", "shaders", "equipment", "items", "particles", "post_effect", "texts", "atlases"];
     
     // Filtrar arquivos do pack
@@ -870,15 +895,71 @@ async function processResourcePack(files, structure) {
             if (validAssetsFolders.includes(firstPart)) {
                 const outputPath = `ItemsAdder/contents/${structure.type}/resourcepack/assets/minecraft/${assetPath}`;
                 resourcePack[outputPath] = await file.arrayBuffer();
+                
+                // Se for um arquivo de modelo, adicionar ao modelMap
+                if (firstPart === "models" && file.name.endsWith(".json")) {
+                    // Extrair o caminho do modelo (sem assets/minecraft/models/ e sem .json)
+                    const modelPath = assetPath.replace("models/", "").replace(/\.json$/i, "");
+                    // Tentar mapear pelo nome do arquivo ou caminho
+                    const fileNameWithoutExt = file.name.replace(/\.json$/i, "");
+                    modelMap[fileNameWithoutExt] = modelPath;
+                    // Também mapear pelo caminho completo relativo
+                    const fullModelPath = assetPath.replace(/\.json$/i, "");
+                    modelMap[fullModelPath] = modelPath;
+                }
             }
         } else if (afterPack.startsWith("assets/")) {
             // Outros namespaces
             const outputPath = `ItemsAdder/contents/${structure.type}/resourcepack/${afterPack}`;
             resourcePack[outputPath] = await file.arrayBuffer();
+            
+            // Se for um arquivo de modelo, adicionar ao modelMap
+            if (afterPack.includes("/models/") && file.name.endsWith(".json")) {
+                const modelPath = afterPack.replace(/^assets\/[^\/]+\/models\//, "").replace(/\.json$/i, "");
+                const fileNameWithoutExt = file.name.replace(/\.json$/i, "");
+                modelMap[fileNameWithoutExt] = modelPath;
+            }
         }
     }
     
-    return Object.keys(resourcePack).length > 0 ? resourcePack : null;
+    return {
+        files: Object.keys(resourcePack).length > 0 ? resourcePack : null,
+        modelMap: modelMap
+    };
+}
+
+function findModelPath(modelReference, itemId, modelMap) {
+    if (!modelReference || typeof modelReference !== "string") return null;
+    
+    // Remover namespace se presente (ex: "minecraft:item/sword" -> "item/sword")
+    let cleanPath = modelReference.replace(/^[^:]+:/, "");
+    
+    // Tentar encontrar no modelMap por diferentes chaves
+    // 1. Pelo caminho completo
+    if (modelMap[cleanPath]) {
+        return modelMap[cleanPath];
+    }
+    
+    // 2. Pelo nome do arquivo (última parte do caminho)
+    const fileName = cleanPath.split("/").pop();
+    if (modelMap[fileName]) {
+        return modelMap[fileName];
+    }
+    
+    // 3. Pelo itemId (caso o modelo tenha o mesmo nome do item)
+    if (itemId && modelMap[itemId]) {
+        return modelMap[itemId];
+    }
+    
+    // 4. Tentar encontrar por correspondência parcial
+    for (const [key, value] of Object.entries(modelMap)) {
+        if (key.includes(fileName) || fileName.includes(key)) {
+            return value;
+        }
+    }
+    
+    // Se não encontrou, retornar o caminho limpo (sem namespace)
+    return cleanPath;
 }
 
 function displayConverterResult(result) {
