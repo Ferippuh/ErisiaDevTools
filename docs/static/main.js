@@ -1,2060 +1,914 @@
-const dropZone = document.getElementById("drop-zone");
-const browseBtn = document.getElementById("browse-btn");
-const directoryPicker = document.getElementById("directory-picker");
-const feedback = document.getElementById("feedback");
-const resultSection = document.getElementById("result");
-const jsonOutput = document.getElementById("json-output");
-const fileCount = document.getElementById("file-count");
-const downloadBtn = document.getElementById("download-btn");
-const sourceInfo = document.getElementById("source-info");
+// Conversor Nexo/Oraxen para ItemsAdder
+const converterDropZone = document.getElementById("converter-drop-zone");
+const converterBrowseBtn = document.getElementById("converter-browse-btn");
+const converterDirectoryPicker = document.getElementById("converter-directory-picker");
+const converterFeedback = document.getElementById("converter-feedback");
+const converterResult = document.getElementById("converter-result");
+const converterSourceInfo = document.getElementById("converter-source-info");
+const converterFileCount = document.getElementById("converter-file-count");
+const converterDownloadBtn = document.getElementById("converter-download-btn");
+const converterSummary = document.getElementById("converter-summary");
 
-let lastJsonText = "";
-let isProcessing = false;
+let convertedFiles = null;
+let isConverting = false;
 
-browseBtn.addEventListener("click", () => directoryPicker.click());
-directoryPicker.addEventListener("change", async (event) => {
+converterBrowseBtn.addEventListener("click", () => converterDirectoryPicker.click());
+converterDirectoryPicker.addEventListener("change", async (event) => {
     const files = [...event.target.files];
-    const sourceLabel = detectSourceFromFiles(files);
-    await processFiles(files, sourceLabel);
-    directoryPicker.value = "";
+    await processConverterFiles(files);
+    converterDirectoryPicker.value = "";
 });
 
-dropZone.addEventListener("click", (event) => {
-    if (event.target === dropZone) {
-        directoryPicker.click();
+converterDropZone.addEventListener("click", (event) => {
+    if (event.target === converterDropZone || event.target.closest(".drop-zone__content")) {
+        converterDirectoryPicker.click();
     }
 });
 
-dropZone.addEventListener("keydown", (event) => {
+converterDropZone.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        directoryPicker.click();
+        converterDirectoryPicker.click();
     }
 });
 
-dropZone.addEventListener("dragover", (event) => {
+converterDropZone.addEventListener("dragover", (event) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
-    dropZone.classList.add("is-dragover");
+    converterDropZone.classList.add("is-dragover");
 });
 
-dropZone.addEventListener("dragleave", (event) => {
-    if (!dropZone.contains(event.relatedTarget)) {
-        dropZone.classList.remove("is-dragover");
+converterDropZone.addEventListener("dragleave", (event) => {
+    if (!converterDropZone.contains(event.relatedTarget)) {
+        converterDropZone.classList.remove("is-dragover");
     }
 });
 
-dropZone.addEventListener("drop", async (event) => {
+converterDropZone.addEventListener("drop", async (event) => {
     event.preventDefault();
-    dropZone.classList.remove("is-dragover");
+    converterDropZone.classList.remove("is-dragover");
 
     const dataTransfer = event.dataTransfer;
     const files = await extractFilesFromDataTransfer(dataTransfer);
-    const sourceLabel = detectSourceFromDataTransfer(dataTransfer, files);
-    await processFiles(files, sourceLabel);
+    await processConverterFiles(files);
 });
 
-downloadBtn.addEventListener("click", () => {
-    if (!lastJsonText) {
-        showFeedback("Nada para baixar ainda.", "error");
+converterDownloadBtn.addEventListener("click", async () => {
+    if (!convertedFiles) {
+        showConverterFeedback("Nada para baixar ainda.", "error");
         return;
     }
-
-    const blob = new Blob([lastJsonText], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = "sounds.json";
-    anchor.click();
-    URL.revokeObjectURL(url);
-});
-
-async function processFiles(files, sourceLabel = "") {
-    if (isProcessing) {
-        return;
-    }
-
-    if (!files || !files.length) {
-        showFeedback("Nenhum arquivo foi recebido.", "error");
-        return;
-    }
-
-    isProcessing = true;
-    setBusyState(true);
-    showFeedback("Processando arquivos...", "info");
 
     try {
-        const { entries, totalSounds } = buildSoundEntries(files);
+        showConverterFeedback("Criando arquivo ZIP...", "info");
+        const zip = new JSZip();
+        
+        // Adicionar arquivos convertidos
+        for (const [path, content] of Object.entries(convertedFiles.files)) {
+            zip.file(path, content);
+        }
 
-        if (!totalSounds) {
-            resultSection.hidden = true;
-            if (fileCount) {
-                fileCount.hidden = true;
+        // Adicionar resource pack se existir
+        if (convertedFiles.resourcePack) {
+            for (const [path, content] of Object.entries(convertedFiles.resourcePack)) {
+                zip.file(path, content);
             }
-            showFeedback("Nenhum arquivo .ogg foi encontrado.", "error");
-            return;
         }
 
-        const jsonText = buildJsonFromEntries(entries);
-        lastJsonText = jsonText;
-        jsonOutput.value = jsonText;
-        if (fileCount) {
-            fileCount.hidden = false;
-            fileCount.textContent = `Total de sons: ${totalSounds}`;
-        }
-        sourceInfo.textContent = sourceLabel ? `Fonte: ${sourceLabel}` : "";
-        sourceInfo.hidden = !sourceLabel;
-        resultSection.hidden = false;
-        showFeedback(`Encontrados ${totalSounds} arquivos .ogg.`, "success");
+        const blob = await zip.generateAsync({ type: "blob" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `ItemsAdder_${convertedFiles.type}_converted.zip`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+        showConverterFeedback("Download iniciado!", "success");
     } catch (error) {
-        console.error(error);
-        resultSection.hidden = true;
-        if (fileCount) {
-            fileCount.hidden = true;
-        }
-        showFeedback("Erro ao processar os arquivos.", "error");
-    } finally {
-        isProcessing = false;
-        setBusyState(false);
+        console.error("Erro ao criar ZIP:", error);
+        showConverterFeedback("Erro ao criar arquivo ZIP.", "error");
     }
-}
+});
 
-function buildSoundEntries(files) {
-    const grouped = new Map();
-    let totalSounds = 0;
-
-    for (const file of files) {
-        const relativePath = getRelativePath(file);
-        if (!relativePath || !relativePath.toLowerCase().endsWith(".ogg")) {
-            continue;
-        }
-
-        const normalized = normalizePath(relativePath);
-        const withoutExt = normalized.replace(/\.ogg$/i, "");
-        const segments = withoutExt.split("/").filter(Boolean);
-        if (!segments.length) {
-            continue;
-        }
-
-        const key = deriveKeyFromSegments(segments);
-        const soundPath = withoutExt;
-
-        if (!grouped.has(key)) {
-            grouped.set(key, new Set());
-        }
-
-        const set = grouped.get(key);
-        if (!set.has(soundPath)) {
-            set.add(soundPath);
-            totalSounds += 1;
-        }
-    }
-
-    const entries = Array.from(grouped.entries())
-        .map(([key, soundSet]) => ({
-            key,
-            sounds: Array.from(soundSet).sort((a, b) => naturalCompare(a, b)),
-        }))
-        .sort((a, b) => a.key.localeCompare(b.key));
-
-    return { entries, totalSounds };
-}
-
-function deriveKeyFromSegments(segments) {
-    const folderSegments = segments.slice(0, -1).map((segment) => segment.replace(/_/g, ""));
-    const fileSegment = segments[segments.length - 1];
-    const { baseName } = splitVariantFromName(fileSegment);
-
-    return [...folderSegments, baseName].filter(Boolean).join(".");
-}
-
-function splitVariantFromName(name) {
-    const match = name.match(/^(.*?)(?:_(\d+))?$/);
-    if (!match) {
-        return { baseName: name, variant: null };
-    }
-
-    const baseName = match[1] || name;
-    const variant = match[2] ? Number(match[2]) : null;
-    return { baseName, variant };
-}
-
-function buildJsonFromEntries(entries) {
-    const payload = {};
-
-    for (const { key, sounds } of entries) {
-        payload[key] = {
-            sounds,
-        };
-    }
-
-    return JSON.stringify(payload, null, 2);
-}
-
-function naturalCompare(a, b) {
-    return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
-}
-
-function getRelativePath(file) {
-    if (!file) {
-        return "";
-    }
-
-    return (
-        file.webkitRelativePath ||
-        file.relativePath ||
-        file._relativePath ||
-        file.name ||
-        ""
-    );
-}
-
-function normalizePath(path) {
-    return path
-        .replace(/^\.+[\\/]/, "")
-        .replace(/^[\\/]+/, "")
-        .replace(/\\/g, "/");
-}
-
-function showFeedback(message, variant) {
-    feedback.textContent = message;
-    feedback.dataset.variant = variant;
-}
-
-function setBusyState(isBusy) {
-    dropZone.classList.toggle("is-busy", isBusy);
-    dropZone.setAttribute("aria-busy", isBusy ? "true" : "false");
-    browseBtn.disabled = isBusy;
-}
-
-async function extractFilesFromDataTransfer(dataTransfer) {
-    const files = [];
-
-    if (dataTransfer.items && dataTransfer.items.length) {
-        const entries = [];
-
-        for (const item of dataTransfer.items) {
-            if (item.kind !== "file") {
-                continue;
-            }
-
-            const entry = item.webkitGetAsEntry?.();
-            if (entry) {
-                entries.push(entry);
-            } else {
-                const file = item.getAsFile?.();
-                if (file) {
-                    files.push(file);
-                }
-            }
-        }
-
-        for (const entry of entries) {
-            await walkFileTree(entry, files);
-        }
-    }
-
-    if (!files.length && dataTransfer.files && dataTransfer.files.length) {
-        files.push(...dataTransfer.files);
-    }
-
-    return files;
-}
-
-async function walkFileTree(entry, files) {
-    if (entry.isFile) {
-        const file = await entryToFile(entry);
-        if (file) {
-            files.push(file);
-        }
+async function processConverterFiles(files) {
+    if (isConverting) {
         return;
     }
 
-    if (entry.isDirectory) {
-        const reader = entry.createReader();
-
-        async function readBatch() {
-            const entries = await readEntries(reader);
-            if (!entries.length) {
-                return;
-            }
-
-            for (const child of entries) {
-                await walkFileTree(child, files);
-            }
-
-            await readBatch();
-        }
-
-        await readBatch();
-    }
-}
-
-function entryToFile(entry) {
-    return new Promise((resolve, reject) => {
-        entry.file(
-            (file) => {
-                const relativePath = cleanFullPath(entry.fullPath) || file.name;
-                Object.defineProperty(file, "_relativePath", {
-                    value: relativePath,
-                    writable: false,
-                    configurable: true,
-                });
-                resolve(file);
-            },
-            (error) => reject(error)
-        );
-    });
-}
-
-function readEntries(reader) {
-    return new Promise((resolve, reject) => {
-        reader.readEntries(resolve, reject);
-    });
-}
-
-function detectSourceFromFiles(files) {
     if (!files || !files.length) {
-        return "";
+        showConverterFeedback("Nenhum arquivo foi recebido.", "error");
+        return;
     }
 
-    const roots = new Set();
+    isConverting = true;
+    setConverterBusyState(true);
+    showConverterFeedback("Analisando estrutura da pasta...", "info");
+    converterResult.hidden = true;
 
+    try {
+        // Detectar tipo (Nexo ou Oraxen) e estrutura
+        const structure = analyzeStructure(files);
+        
+        if (!structure.type) {
+            showConverterFeedback("Não foi possível detectar se é Nexo ou Oraxen. Certifique-se de que a pasta contém uma pasta 'items'.", "error");
+            return;
+        }
+
+        showConverterFeedback(`Detectado: ${structure.type.toUpperCase()}. Convertendo arquivos...`, "info");
+
+        // Converter itens
+        const convertedItems = await convertItems(files, structure);
+        
+        // Processar resource pack se existir
+        let resourcePack = null;
+        if (structure.hasPack) {
+            showConverterFeedback("Processando resource pack...", "info");
+            resourcePack = await processResourcePack(files, structure);
+        }
+
+        convertedFiles = {
+            type: structure.type,
+            files: convertedItems,
+            resourcePack: resourcePack,
+            stats: {
+                itemsConverted: Object.keys(convertedItems).length,
+                hasResourcePack: !!resourcePack
+            }
+        };
+
+        // Mostrar resultado
+        displayConverterResult(convertedFiles);
+        converterResult.hidden = false;
+        showConverterFeedback("Conversão concluída com sucesso!", "success");
+    } catch (error) {
+        console.error("Erro na conversão:", error);
+        showConverterFeedback(`Erro durante a conversão: ${error.message}`, "error");
+    } finally {
+        isConverting = false;
+        setConverterBusyState(false);
+    }
+}
+
+function analyzeStructure(files) {
+    const structure = {
+        type: null,
+        hasItems: false,
+        hasPack: false,
+        itemsPath: null,
+        packPath: null
+    };
+
+    // Procurar pasta items
     for (const file of files) {
-        const relativePath = normalizePath(getRelativePath(file));
-        if (!relativePath) {
-            continue;
-        }
-
-        const [root] = relativePath.split("/");
-        if (root) {
-            roots.add(root);
-        }
-    }
-
-    if (!roots.size) {
-        return files[0].name || "";
-    }
-
-    if (roots.size === 1) {
-        return roots.values().next().value;
-    }
-
-    return `${roots.size} pastas`;
-}
-
-function detectSourceFromDataTransfer(dataTransfer, files) {
-    if (dataTransfer.items && dataTransfer.items.length) {
-        const roots = new Set();
-
-        for (const item of dataTransfer.items) {
-            const entry = item.webkitGetAsEntry?.();
-            if (!entry) {
-                continue;
-            }
-
-            const cleanPath = cleanFullPath(entry.fullPath);
-            const [root] = cleanPath.split("/");
-            if (root) {
-                roots.add(root);
-            }
-        }
-
-        if (roots.size === 1) {
-            return roots.values().next().value;
-        }
-        if (roots.size > 1) {
-            return `${roots.size} pastas`;
-        }
-    }
-
-    return detectSourceFromFiles(files);
-}
-
-function cleanFullPath(fullPath = "") {
-    return fullPath.replace(/^\//, "");
-}
-
-const modelAdditionsDrop = document.getElementById("model-additions-drop");
-const modelBaseDrop = document.getElementById("model-base-drop");
-
-if (modelAdditionsDrop && modelBaseDrop) {
-    const modelSection = document.getElementById("modeldata");
-    const additionsInput = document.getElementById("model-additions-input");
-    const additionsBrowseBtn = document.getElementById("model-additions-browse");
-    const additionsFeedback = document.getElementById("model-additions-feedback");
-    const additionsSummary = document.getElementById("model-additions-summary");
-
-    const baseInput = document.getElementById("model-base-input");
-    const baseBrowseBtn = document.getElementById("model-base-browse");
-    const baseFeedback = document.getElementById("model-base-feedback");
-    const baseSummary = document.getElementById("model-base-summary");
-
-    const processBtn = document.getElementById("modeldata-process-btn");
-    const generalFeedback = document.getElementById("modeldata-feedback");
-    const previewSection = document.getElementById("modeldata-preview");
-    const previewList = document.getElementById("modeldata-preview-list");
-    const previewSummary = document.getElementById("modeldata-summary");
-    const downloadZipBtn = document.getElementById("modeldata-download-btn");
-
-    const modelState = {
-        additionsFiles: [],
-        baseFiles: [],
-        zipBlob: null,
-    };
-
-    let isProcessingModels = false;
-
-    setupModelDropZone({
-        zone: modelAdditionsDrop,
-        input: additionsInput,
-        browseBtn: additionsBrowseBtn,
-        feedbackEl: additionsFeedback,
-        async onFiles(payload) {
-            await handleAdditions(payload);
-        },
-    });
-
-    setupModelDropZone({
-        zone: modelBaseDrop,
-        input: baseInput,
-        browseBtn: baseBrowseBtn,
-        feedbackEl: baseFeedback,
-        async onFiles(payload) {
-            await handleBase(payload);
-        },
-    });
-
-    processBtn?.addEventListener("click", () => {
-        void handleModelProcessing();
-    });
-
-    downloadZipBtn?.addEventListener("click", () => {
-        if (!modelState.zipBlob) {
-            updateFeedbackElement(generalFeedback, "Gere a mescla antes de baixar.", "error");
-            return;
-        }
-        triggerZipDownload(modelState.zipBlob);
-    });
-
-    function refreshModelProcessState() {
-        const canProcess = modelState.additionsFiles.length > 0 && modelState.baseFiles.length > 0;
-        if (processBtn) {
-            processBtn.disabled = !canProcess || isProcessingModels;
-        }
-        if (downloadZipBtn) {
-            downloadZipBtn.disabled = !modelState.zipBlob;
-        }
-    }
-
-    function resetModelPreview() {
-        if (previewSection) {
-            previewSection.hidden = true;
-        }
-        if (previewList) {
-            previewList.innerHTML = "";
-        }
-        if (previewSummary) {
-            previewSummary.textContent = "";
-        }
-        modelState.zipBlob = null;
-        refreshModelProcessState();
-    }
-
-    async function handleAdditions({ jsonFiles, ignoredCount }) {
-        modelState.additionsFiles = jsonFiles;
-        renderModelSummary(additionsSummary, jsonFiles);
-
-        if (!jsonFiles.length) {
-            updateFeedbackElement(additionsFeedback, "Nenhum arquivo .json detectado.", "error");
-        } else {
-            const messageParts = [`${jsonFiles.length} arquivo${jsonFiles.length === 1 ? "" : "s"} .json carregado${jsonFiles.length === 1 ? "" : "s"}.`];
-            if (ignoredCount > 0) {
-                messageParts.push(`${ignoredCount} arquivo${ignoredCount === 1 ? "" : "s"} ignorado${ignoredCount === 1 ? "" : "s"} por não serem .json.`);
-            }
-            updateFeedbackElement(additionsFeedback, messageParts.join(" "), "success");
-        }
-
-        updateFeedbackElement(generalFeedback, "", "");
-        resetModelPreview();
-        refreshModelProcessState();
-    }
-
-    async function handleBase({ jsonFiles, ignoredCount }) {
-        modelState.baseFiles = jsonFiles;
-        renderModelSummary(baseSummary, jsonFiles);
-
-        if (!jsonFiles.length) {
-            updateFeedbackElement(baseFeedback, "Nenhum arquivo .json detectado.", "error");
-        } else {
-            const messageParts = [`${jsonFiles.length} arquivo${jsonFiles.length === 1 ? "" : "s"} .json carregado${jsonFiles.length === 1 ? "" : "s"}.`];
-            if (ignoredCount > 0) {
-                messageParts.push(`${ignoredCount} arquivo${ignoredCount === 1 ? "" : "s"} ignorado${ignoredCount === 1 ? "" : "s"} por não serem .json.`);
-            }
-            updateFeedbackElement(baseFeedback, messageParts.join(" "), "success");
-        }
-
-        updateFeedbackElement(generalFeedback, "", "");
-        resetModelPreview();
-        refreshModelProcessState();
-    }
-
-    async function handleModelProcessing() {
-        if (isProcessingModels || !processBtn) {
-            return;
-        }
-
-        const canProcess = modelState.additionsFiles.length > 0 && modelState.baseFiles.length > 0;
-        if (!canProcess) {
-            updateFeedbackElement(generalFeedback, "Selecione os arquivos de entrada antes de processar.", "error");
-            return;
-        }
-
-        isProcessingModels = true;
-        if (modelSection) {
-            modelSection.setAttribute("aria-busy", "true");
-        }
-        updateFeedbackElement(generalFeedback, "Mesclando arquivos...", "info");
-        resetModelPreview();
-        refreshModelProcessState();
-
-        try {
-            const additionParse = await parseModelFiles(modelState.additionsFiles);
-            const baseParse = await parseModelFiles(modelState.baseFiles);
-
-            if (additionParse.errors.length || baseParse.errors.length) {
-                const firstError = [...additionParse.errors, ...baseParse.errors][0];
-                const message = firstError ? `Erro ao ler ${firstError.key}: ${firstError.message}` : "Erro ao ler arquivos selecionados.";
-                updateFeedbackElement(generalFeedback, message, "error");
-                console.error("Falha ao ler arquivos de modelo:", additionParse.errors, baseParse.errors);
-                return;
-            }
-
-            const mergeResult = buildModelMerge(additionParse.map, baseParse.map);
-            if (!mergeResult.changedFiles.length) {
-                updateFeedbackElement(generalFeedback, "Nenhum override novo foi identificado com os arquivos fornecidos.", "error");
-                return;
-            }
-
-            const zipBlob = await buildModelZip({
-                changedFiles: mergeResult.changedFiles,
-                baseMap: baseParse.map,
-            });
-            modelState.zipBlob = zipBlob;
-
-            renderPreviewList(previewList, mergeResult.changedFiles);
-            if (previewSection) {
-                previewSection.hidden = false;
-            }
-            if (previewSummary) {
-                previewSummary.textContent = formatModelSummary(mergeResult.stats, mergeResult.changedFiles.length, mergeResult.skippedCount);
-            }
-
-            updateFeedbackElement(generalFeedback, "Mesclagem concluída! Revise os arquivos abaixo.", "success");
-        } catch (error) {
-            console.error("Erro ao mesclar CustomModelData:", error);
-            updateFeedbackElement(generalFeedback, "Erro ao mesclar arquivos. Verifique o console para detalhes.", "error");
-        } finally {
-            isProcessingModels = false;
-            if (modelSection) {
-                modelSection.setAttribute("aria-busy", "false");
-            }
-            refreshModelProcessState();
-        }
-    }
-
-    function setupModelDropZone({ zone, input, browseBtn, feedbackEl, onFiles }) {
-        if (!zone || !input || typeof onFiles !== "function") {
-            return;
-        }
-
-        browseBtn?.addEventListener("click", () => input.click());
-
-        zone.addEventListener("click", (event) => {
-            if (event.target === zone || event.target.closest(".drop-zone__content")) {
-                input.click();
-            }
-        });
-
-        zone.addEventListener("keydown", (event) => {
-            if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                input.click();
-            }
-        });
-
-        zone.addEventListener("dragover", (event) => {
-            event.preventDefault();
-            zone.classList.add("is-dragover");
-        });
-
-        zone.addEventListener("dragleave", (event) => {
-            if (!zone.contains(event.relatedTarget)) {
-                zone.classList.remove("is-dragover");
-            }
-        });
-
-        zone.addEventListener("drop", async (event) => {
-            event.preventDefault();
-            zone.classList.remove("is-dragover");
-            const files = await extractFilesFromDataTransfer(event.dataTransfer);
-            await handleIncomingFiles(files);
-        });
-
-        input.addEventListener("change", async (event) => {
-            const files = [...event.target.files];
-            await handleIncomingFiles(files);
-            input.value = "";
-        });
-
-        async function handleIncomingFiles(files) {
-            if (!files.length) {
-                updateFeedbackElement(feedbackEl, "Nenhum arquivo foi selecionado.", "error");
-                return;
-            }
-
-            setDropBusyState(zone, browseBtn, true);
-            updateFeedbackElement(feedbackEl, "Carregando arquivos...", "info");
-
-            try {
-                // For texture optimizer, accept .bbmodel files
-                const isTextureOptimizer = zone.id === "texture-models-drop";
-                const acceptedFiles = isTextureOptimizer 
-                    ? files.filter(f => f.name.toLowerCase().endsWith('.bbmodel'))
-                    : filterJsonFiles(files);
-                
-                await onFiles({
-                    jsonFiles: acceptedFiles,
-                    ignoredCount: files.length - acceptedFiles.length,
-                    totalCount: files.length,
-                });
-            } catch (error) {
-                console.error("Erro ao processar arquivos:", error);
-                updateFeedbackElement(feedbackEl, "Erro ao processar arquivos.", "error");
-            } finally {
-                setDropBusyState(zone, browseBtn, false);
-            }
-        }
-    }
-
-    function setDropBusyState(zone, browseBtn, isBusy) {
-        zone.classList.toggle("is-busy", isBusy);
-        zone.setAttribute("aria-busy", isBusy ? "true" : "false");
-        if (browseBtn) {
-            browseBtn.disabled = isBusy;
-        }
-    }
-
-    function updateFeedbackElement(element, message, variant) {
-        if (!element) {
-            return;
-        }
-        element.textContent = message || "";
-        if (variant) {
-            element.dataset.variant = variant;
-        } else {
-            delete element.dataset.variant;
-        }
-    }
-
-    function filterJsonFiles(files) {
-        return files.filter((file) => {
-            const path = normalizePath(getRelativePath(file));
-            return path.toLowerCase().endsWith(".json");
-        });
-    }
-
-    function renderModelSummary(target, files) {
-        if (!target) {
-            return;
-        }
-        if (!files.length) {
-            target.textContent = "";
-            return;
-        }
-        const keys = Array.from(new Set(files.map(deriveModelKeyFromFile)));
-        const sample = keys.slice(0, 3).join(", ");
-        const suffix = keys.length > 3 ? ", ..." : "";
-        target.textContent = `${keys.length} arquivo${keys.length === 1 ? "" : "s"} .json detectado${keys.length === 1 ? "" : "s"} — ${sample}${suffix}`;
-    }
-
-    function deriveModelKeyFromFile(file) {
-        const relativePath = normalizePath(getRelativePath(file));
-        return getModelFileKey(relativePath || file.name);
-    }
-
-    function getModelFileKey(path = "") {
-        if (!path) {
-            return "";
-        }
-        const segments = path.split("/").filter(Boolean);
-        if (!segments.length) {
-            return "";
-        }
-        const itemIndex = segments.lastIndexOf("item");
-        if (itemIndex !== -1 && itemIndex < segments.length - 1) {
-            return segments.slice(itemIndex + 1).join("/");
-        }
-        return segments[segments.length - 1];
-    }
-
-    async function parseModelFiles(files) {
-        const map = new Map();
-        const errors = [];
-
-        for (const file of files) {
-            const key = deriveModelKeyFromFile(file);
-            if (!key) {
-                continue;
-            }
-
-            try {
-                const text = await file.text();
-                const json = JSON.parse(text);
-                map.set(key, { json, text });
-            } catch (error) {
-                errors.push({
-                    key,
-                    message: error instanceof Error ? error.message : String(error),
-                });
-            }
-        }
-
-        return { map, errors };
-    }
-
-    function buildModelMerge(additionMap, baseMap) {
-        const changedFiles = [];
-        const stats = {
-            merged: 0,
-            created: 0,
-            overridesAdded: 0,
-            duplicatesSkipped: 0,
-        };
-        let skippedCount = 0;
-
-        for (const [key, addition] of additionMap.entries()) {
-            const base = baseMap.get(key);
-
-            if (base) {
-                const mergeOutcome = mergeModelOverrides(base.json, addition.json);
-                if (mergeOutcome.addedCount > 0) {
-                    stats.merged += 1;
-                    stats.overridesAdded += mergeOutcome.addedCount;
-                    if (mergeOutcome.duplicateCount) {
-                        stats.duplicatesSkipped += mergeOutcome.duplicateCount;
-                    }
-                    changedFiles.push({
-                        key,
-                        jsonText: formatModelJson(mergeOutcome.json),
-                        isNew: false,
-                        addedCount: mergeOutcome.addedCount,
-                        startValue: mergeOutcome.startValue,
-                        endValue: mergeOutcome.endValue,
-                        duplicateCount: mergeOutcome.duplicateCount,
-                    });
-                } else {
-                    skippedCount += 1;
-                    stats.duplicatesSkipped += mergeOutcome.duplicateCount;
-                }
+        const path = getRelativePath(file).toLowerCase();
+        
+        if (path.includes("/items/") || path.startsWith("items/")) {
+            structure.hasItems = true;
+            structure.itemsPath = path.split("/items/")[0] || "";
+            
+            // Detectar tipo baseado no caminho
+            if (path.includes("/nexo/") || path.startsWith("nexo/")) {
+                structure.type = "nexo";
+            } else if (path.includes("/oraxen/") || path.startsWith("oraxen/")) {
+                structure.type = "oraxen";
             } else {
-                const jsonClone = JSON.parse(JSON.stringify(addition.json));
-                const addedCount = countOverridesInJson(jsonClone);
-                const sourceEntry = additionMap.get(key);
-                stats.created += 1;
-                stats.overridesAdded += addedCount;
-                changedFiles.push({
-                    key,
-                    jsonText: formatModelJson(jsonClone),
-                    isNew: true,
-                    addedCount,
-                    duplicateCount: 0,
-                });
+                // Tentar detectar pelo conteúdo ou estrutura
+                // Por padrão, assumir Oraxen (mais comum)
+                structure.type = "oraxen";
             }
+            break;
         }
-
-        return { changedFiles, stats, skippedCount };
     }
 
-    function mergeModelOverrides(baseJson, additionJson) {
-        const merged = JSON.parse(JSON.stringify(baseJson || {}));
-        const baseOverrides = Array.isArray(merged.overrides) ? merged.overrides.filter(Boolean) : [];
-        const additionOverrides = Array.isArray(additionJson?.overrides) ? additionJson.overrides.filter(Boolean) : [];
-
-        let currentMax = null;
-        for (const override of baseOverrides) {
-            const value = getCustomModelDataValue(override);
-            if (typeof value === "number") {
-                currentMax = currentMax === null ? value : Math.max(currentMax, value);
-            }
+    // Procurar pasta pack
+    for (const file of files) {
+        const path = getRelativePath(file).toLowerCase();
+        if (path.includes("/pack/") || path.startsWith("pack/")) {
+            structure.hasPack = true;
+            structure.packPath = path.split("/pack/")[0] || "";
+            break;
         }
+    }
 
-        const existingModels = new Set(
-            baseOverrides
-                .map(getOverrideModelPath)
-                .filter((modelPath) => !!modelPath)
-        );
+    return structure;
+}
 
-        const startValue = currentMax === null ? 1 : currentMax + 1;
-        let nextValue = startValue;
-        const appended = [];
-        let duplicateCount = 0;
+async function convertItems(files, structure) {
+    const converted = {};
+    const itemsFiles = files.filter(f => {
+        const path = getRelativePath(f).toLowerCase();
+        return (path.includes("/items/") || path.startsWith("items/")) && 
+               f.name.endsWith(".yml") || f.name.endsWith(".yaml");
+    });
 
-        for (const rawOverride of additionOverrides) {
-            const normalized = normalizeModelOverride(rawOverride);
-            const normalizedModel = getOverrideModelPath(normalized);
-            if (!normalizedModel) {
-                continue;
+    for (const file of itemsFiles) {
+        try {
+            const text = await file.text();
+            const sourceConfig = jsyaml.load(text);
+            
+            if (!sourceConfig) continue;
+
+            const outputConfig = {
+                info: {
+                    namespace: structure.type,
+                    converted_from: structure.type
+                },
+                items: {}
+            };
+
+            // Converter usando o conversor apropriado
+            if (structure.type === "oraxen") {
+                convertOraxenItems(sourceConfig, outputConfig.items, file.name);
+            } else {
+                convertNexoItems(sourceConfig, outputConfig.items, file.name);
             }
 
-            if (existingModels.has(normalizedModel)) {
-                duplicateCount += 1;
-                continue;
-            }
+            // Determinar caminho de saída
+            const relativePath = getRelativePath(file);
+            const itemsIndex = relativePath.toLowerCase().indexOf("/items/");
+            const fileName = file.name;
+            const outputPath = `ItemsAdder/contents/${structure.type}/${fileName}`;
 
-            existingModels.add(normalizedModel);
-            normalized.predicate.custom_model_data = nextValue;
-            appended.push({
-                custom_model_data: nextValue,
-                model: normalized.model,
+            converted[outputPath] = jsyaml.dump(outputConfig, { 
+                lineWidth: -1,
+                quotingType: '"',
+                forceQuotes: false
             });
-            baseOverrides.push(normalized);
-            nextValue += 1;
+        } catch (error) {
+            console.warn(`Erro ao converter ${file.name}:`, error);
         }
+    }
 
-        if (!appended.length) {
-            return {
-                json: merged,
-                addedCount: 0,
-                startValue: null,
-                endValue: null,
-                duplicateCount,
+    return converted;
+}
+
+function convertOraxenItems(sourceConfig, outputItems, fileName) {
+    // Obter seção de itens do source
+    const sourceItems = sourceConfig.items || sourceConfig;
+    
+    for (const [itemId, itemData] of Object.entries(sourceItems)) {
+        if (typeof itemData !== "object" || !itemData) continue;
+
+        const convertedItem = {};
+        
+        // Mapeamentos básicos
+        mapField(itemData, convertedItem, ["customname", "displayname", "itemname"], "name");
+        mapField(itemData, convertedItem, "lore", "lore");
+        mapField(itemData, convertedItem, "permission", "permission_suffix");
+        mapField(itemData, convertedItem, "unbreakable", "durability.unbreakable");
+        mapField(itemData, convertedItem, "ItemFlags", "item_flags");
+        mapField(itemData, convertedItem, "Enchantments", "enchantments");
+        mapField(itemData, convertedItem, "hide_tooltip", "hide_tooltip");
+        mapField(itemData, convertedItem, "enchantment_glint_override", "glint");
+
+        // Pack/Resource
+        if (itemData.Pack) {
+            convertedItem.resource = convertPack(itemData.Pack, itemData.material || "PAPER", true);
+        } else if (itemData.material) {
+            convertedItem.resource = {
+                material: itemData.material,
+                generate: true
             };
         }
 
-        baseOverrides.sort((a, b) => {
-            const aValue = getCustomModelDataValue(a) ?? 0;
-            const bValue = getCustomModelDataValue(b) ?? 0;
-            return aValue - bValue;
-        });
-
-        merged.overrides = baseOverrides;
-
-        return {
-            json: merged,
-            addedCount: appended.length,
-            startValue: appended[0].custom_model_data,
-            endValue: appended[appended.length - 1].custom_model_data,
-            duplicateCount,
-        };
-    }
-
-    function normalizeModelOverride(rawOverride) {
-        const clone = JSON.parse(JSON.stringify(rawOverride || {}));
-        if (!clone.predicate || typeof clone.predicate !== "object") {
-            clone.predicate = {};
-        }
-        if (typeof clone.model === "string") {
-            clone.model = clone.model.trim();
-        }
-        return clone;
-    }
-
-    function getOverrideModelPath(override) {
-        if (!override || typeof override !== "object") {
-            return "";
-        }
-        const model = override.model;
-        if (typeof model !== "string") {
-            return "";
-        }
-        return model.trim();
-    }
-
-    function getCustomModelDataValue(override) {
-        if (!override || typeof override !== "object") {
-            return null;
-        }
-        const predicate = override.predicate;
-        if (!predicate || typeof predicate !== "object") {
-            return null;
-        }
-        const value = predicate.custom_model_data;
-        return typeof value === "number" ? value : null;
-    }
-
-    function countOverridesInJson(json) {
-        if (!json || typeof json !== "object") {
-            return 0;
-        }
-        return Array.isArray(json.overrides) ? json.overrides.length : 0;
-    }
-
-    async function buildModelZip({ changedFiles, baseMap }) {
-        if (typeof JSZip === "undefined") {
-            throw new Error("JSZip não está disponível.");
-        }
-        const zip = new JSZip();
-        const root = zip.folder("minecraft").folder("models").folder("item");
-
-        const changedLookup = new Map();
-        for (const file of changedFiles) {
-            changedLookup.set(file.key, file);
+        // Custom Model Data
+        if (itemData.Pack?.custom_model_data !== undefined) {
+            if (!convertedItem.resource) convertedItem.resource = {};
+            convertedItem.resource.custom_model_data = itemData.Pack.custom_model_data;
         }
 
-        for (const [key, entry] of baseMap.entries()) {
-            const changed = changedLookup.get(key);
-            const content = changed ? changed.jsonText : entry.text ?? JSON.stringify(entry.json, null, 2);
-            root.file(key, content);
-            if (changed) {
-                changedLookup.delete(key);
+        // Attribute Modifiers
+        if (itemData.AttributeModifiers) {
+            convertedItem.attribute_modifiers = convertAttributeModifiers(itemData.AttributeModifiers);
+        }
+
+        // Furniture
+        if (itemData.Mechanics?.furniture) {
+            if (!convertedItem.behaviours) convertedItem.behaviours = {};
+            convertedItem.behaviours.furniture = convertFurniture(itemData.Mechanics.furniture, itemData);
+        }
+
+        // Consumable/Food
+        if (itemData.food || itemData.consumable) {
+            convertedItem.consumable = convertConsumable(itemData.food, itemData.consumable);
+        }
+
+        // Durability
+        if (itemData.Components?.durability !== undefined) {
+            const durability = itemData.Components.durability?.value ?? itemData.Components.durability;
+            if (typeof durability === "number") {
+                convertedItem.durability = { max_durability: durability };
             }
         }
 
-        for (const [key, file] of changedLookup.entries()) {
-            root.file(key, file.jsonText);
-        }
-
-        return zip.generateAsync({ type: "blob" });
-    }
-
-    function triggerZipDownload(blob) {
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        const dateStamp = new Date().toISOString().split("T")[0];
-        anchor.href = url;
-        anchor.download = `erisia-modeldata-${dateStamp}.zip`;
-        anchor.click();
-        setTimeout(() => URL.revokeObjectURL(url), 2000);
-    }
-
-    function renderPreviewList(container, files) {
-        if (!container) {
-            return;
-        }
-
-        container.innerHTML = "";
-        files.forEach((file, index) => {
-            const details = document.createElement("details");
-            details.open = files.length <= 3 && index === 0;
-
-            const summary = document.createElement("summary");
-            const duplicateNote = file.duplicateCount
-                ? ` · ${file.duplicateCount} duplicado${file.duplicateCount === 1 ? "" : "s"} ignorado${file.duplicateCount === 1 ? "" : "s"}`
-                : "";
-            summary.textContent = file.isNew
-                ? `${file.key} • novo arquivo (${file.addedCount} override${file.addedCount === 1 ? "" : "s"})`
-                : `${file.key} • +${file.addedCount} override${file.addedCount === 1 ? "" : "s"} (CMD ${file.startValue} → ${file.endValue})${duplicateNote}`;
-
-            const pre = document.createElement("pre");
-            pre.textContent = file.jsonText;
-
-            details.append(summary, pre);
-            container.append(details);
-        });
-    }
-
-    function formatModelSummary(stats, changedCount, skippedCount) {
-        const parts = [];
-        parts.push(`${changedCount} arquivo${changedCount === 1 ? "" : "s"} pronto${changedCount === 1 ? "" : "s"}`);
-        if (stats.merged) {
-            parts.push(`${stats.merged} mesclado${stats.merged === 1 ? "" : "s"}`);
-        }
-        if (stats.created) {
-            parts.push(`${stats.created} novo${stats.created === 1 ? "" : "s"}`);
-        }
-        parts.push(`${stats.overridesAdded} override${stats.overridesAdded === 1 ? "" : "s"} adicionad${stats.overridesAdded === 1 ? "o" : "os"}`);
-        if (skippedCount) {
-            parts.push(`${skippedCount} sem alterações`);
-        }
-        if (stats.duplicatesSkipped) {
-            parts.push(`${stats.duplicatesSkipped} modelo${stats.duplicatesSkipped === 1 ? "" : "s"} duplicado${stats.duplicatesSkipped === 1 ? "" : "s"}`);
-        }
-        return parts.join(" · ");
-    }
-
-    function formatModelJson(json) {
-        const indent = (level) => "    ".repeat(level);
-        const lines = ["{"];
-
-        const orderedKeys = [];
-        const seen = new Set();
-        const preferredOrder = ["parent", "textures", "overrides"];
-
-        for (const key of preferredOrder) {
-            if (Object.prototype.hasOwnProperty.call(json, key)) {
-                orderedKeys.push(key);
-                seen.add(key);
+        // Template/Variant
+        if (itemData.template !== undefined) {
+            if (typeof itemData.template === "string") {
+                convertedItem.variant_of = itemData.template;
+            } else if (typeof itemData.template === "boolean") {
+                convertedItem.template = itemData.template;
             }
         }
 
-        for (const key of Object.keys(json || {})) {
-            if (!seen.has(key)) {
-                orderedKeys.push(key);
-                seen.add(key);
-            }
+        // Disable Enchanting
+        if (itemData.disable_enchanting) {
+            convertedItem.blocked_enchants = ["all"];
         }
 
-        orderedKeys.forEach((key, index) => {
-            const value = json[key];
-            if (value === undefined) {
-                return;
-            }
-
-            let formattedValue;
-            if (key === "overrides" && Array.isArray(value)) {
-                formattedValue = formatOverridesArray(value, 1);
-            } else if (isPlainObject(value)) {
-                formattedValue = formatMultilineObject(value, 1);
-            } else {
-                formattedValue = JSON.stringify(value);
-            }
-
-            const suffix = index < orderedKeys.length - 1 ? "," : "";
-            lines.push(`${indent(1)}"${key}": ${formattedValue}${suffix}`);
-        });
-
-        lines.push("}");
-        return lines.join("\n");
-    }
-
-    function formatMultilineObject(obj, level) {
-        const indent = (lvl) => "    ".repeat(lvl);
-        const entries = Object.entries(obj || {});
-        if (!entries.length) {
-            return "{}";
+        // Equippable
+        if (itemData.Pack?.Components?.equippable) {
+            convertedItem.equippable = convertEquippable(itemData.Pack.Components.equippable);
         }
 
-        const lines = ["{"];
-        entries.forEach(([key, value], index) => {
-            let formattedValue;
-            if (isPlainObject(value)) {
-                formattedValue = formatMultilineObject(value, level + 1);
-            } else {
-                formattedValue = JSON.stringify(value);
-            }
-            const suffix = index < entries.length - 1 ? "," : "";
-            lines.push(`${indent(level + 1)}"${key}": ${formattedValue}${suffix}`);
-        });
-        lines.push(`${indent(level)}}`);
-        return lines.join("\n");
-    }
-
-    function formatOverridesArray(overrides, level) {
-        if (!Array.isArray(overrides) || !overrides.length) {
-            return "[]";
+        // Use Cooldown
+        if (itemData.use_cooldown) {
+            if (!convertedItem.events_settings) convertedItem.events_settings = {};
+            convertedItem.events_settings.cooldown = {
+                indicator: "VANILLA",
+                ticks: Math.round((itemData.use_cooldown.seconds || 1.0) * 20)
+            };
         }
-        const indent = (lvl) => "    ".repeat(lvl);
-        const lines = ["["];
 
-        overrides.forEach((override, index) => {
-            const entry = formatOverrideEntry(override);
-            const suffix = index < overrides.length - 1 ? "," : "";
-            lines.push(`${indent(level + 1)}${entry}${suffix}`);
-        });
-
-        lines.push(`${indent(level)}]`);
-        return lines.join("\n");
-    }
-
-    function formatOverrideEntry(override) {
-        const { predicate = {}, ...rest } = override || {};
-        const parts = [`"predicate": ${formatInlineObject(predicate)}`];
-
-        const orderedRestKeys = Object.keys(rest).sort((a, b) => {
-            if (a === "model") {
-                return -1;
-            }
-            if (b === "model") {
-                return 1;
-            }
-            return a.localeCompare(b);
-        });
-
-        orderedRestKeys.forEach((key) => {
-            const value = rest[key];
-            const formattedValue = isPlainObject(value) ? formatInlineObject(value) : JSON.stringify(value);
-            parts.push(`"${key}": ${formattedValue}`);
-        });
-
-        return `{${parts.join(", ")}}`;
-    }
-
-    function formatInlineObject(obj) {
-        const entries = Object.entries(obj || {});
-        if (!entries.length) {
-            return "{}";
+        // Big Mining
+        if (itemData.Mechanics?.bigmining) {
+            if (!convertedItem.events) convertedItem.events = {};
+            if (!convertedItem.events.block_break) convertedItem.events.block_break = {};
+            convertedItem.events.block_break.multiple_break = {
+                size: itemData.Mechanics.bigmining.radius || 1,
+                depth: itemData.Mechanics.bigmining.depth || 1,
+                drop_all_blocks: {
+                    enabled: true
+                }
+            };
         }
-        return `{${entries
-            .map(([key, value]) => {
-                const formattedValue = isPlainObject(value) ? formatInlineObject(value) : JSON.stringify(value);
-                return `"${key}": ${formattedValue}`;
-            })
-            .join(", ")}}`;
-    }
 
-    function isPlainObject(value) {
-        return Object.prototype.toString.call(value) === "[object Object]";
+        outputItems[itemId] = convertedItem;
     }
 }
 
-// ============================================================================
-// Texture Optimizer System
-// ============================================================================
+function convertNexoItems(sourceConfig, outputItems, fileName) {
+    // Similar ao Oraxen, mas com algumas diferenças
+    const sourceItems = sourceConfig.items || sourceConfig;
+    
+    for (const [itemId, itemData] of Object.entries(sourceItems)) {
+        if (typeof itemData !== "object" || !itemData) continue;
 
-const textureOptimizerSection = document.getElementById("texture-optimizer");
-if (textureOptimizerSection) {
-    const modelsDrop = document.getElementById("texture-models-drop");
-    const modelsInput = document.getElementById("texture-models-input");
-    const modelsBrowseBtn = document.getElementById("texture-models-browse");
-    const modelsFeedback = document.getElementById("texture-models-feedback");
-    const modelsSummary = document.getElementById("texture-models-summary");
-    const optimizeBtn = document.getElementById("texture-optimize-btn");
-    const optimizeFeedback = document.getElementById("texture-optimize-feedback");
-    const previewSection = document.getElementById("texture-preview");
-    const previewContent = document.getElementById("texture-preview-content");
-    const previewSummary = document.getElementById("texture-summary");
-    const downloadBtn = document.getElementById("texture-download-btn");
+        const convertedItem = {};
+        
+        // Mapeamentos básicos (mesmos do Oraxen)
+        mapField(itemData, convertedItem, ["customname", "displayname", "itemname"], "name");
+        mapField(itemData, convertedItem, "lore", "lore");
+        mapField(itemData, convertedItem, "permission", "permission_suffix");
+        mapField(itemData, convertedItem, "unbreakable", "durability.unbreakable");
+        mapField(itemData, convertedItem, "ItemFlags", "item_flags");
+        mapField(itemData, convertedItem, "Enchantments", "enchantments");
+        mapField(itemData, convertedItem, "hide_tooltip", "hide_tooltip");
+        mapField(itemData, convertedItem, "enchantment_glint_override", "glint");
 
-    const textureState = {
-        modelFiles: [],
-        textureMap: new Map(), // path -> ImageData
-        textureGroups: new Map(), // similar textures grouped
-        atlasBlob: null,
-        optimizedModels: [],
+        // Pack/Resource
+        if (itemData.Pack) {
+            convertedItem.resource = convertPack(itemData.Pack, itemData.material || "PAPER", false);
+        }
+
+        // Custom Model Data
+        if (itemData.Pack?.custom_model_data !== undefined) {
+            if (!convertedItem.resource) convertedItem.resource = {};
+            convertedItem.resource.custom_model_data = itemData.Pack.custom_model_data;
+        }
+
+        // Attribute Modifiers
+        if (itemData.AttributeModifiers) {
+            convertedItem.attribute_modifiers = convertAttributeModifiers(itemData.AttributeModifiers);
+        }
+
+        // Furniture
+        if (itemData.Mechanics?.furniture) {
+            if (!convertedItem.behaviours) convertedItem.behaviours = {};
+            convertedItem.behaviours.furniture = convertFurniture(itemData.Mechanics.furniture, itemData);
+        }
+
+        // Consumable/Food
+        if (itemData.food || itemData.consumable) {
+            convertedItem.consumable = convertConsumable(itemData.food, itemData.consumable);
+        }
+
+        // Durability (Nexo usa formato diferente)
+        if (itemData.durability !== undefined) {
+            const durability = itemData.durability?.value ?? itemData.durability;
+            if (typeof durability === "number") {
+                convertedItem.durability = { max_custom_durability: durability };
+            }
+        }
+
+        // Template/Variant
+        if (itemData.template !== undefined) {
+            if (typeof itemData.template === "string") {
+                convertedItem.variant_of = itemData.template;
+            } else if (typeof itemData.template === "boolean") {
+                convertedItem.template = itemData.template;
+            }
+        }
+
+        // Disable Enchanting
+        if (itemData.disable_enchanting) {
+            convertedItem.blocked_enchants = ["all"];
+        }
+
+        // Equippable
+        if (itemData.Pack?.Components?.equippable) {
+            convertedItem.equippable = convertEquippable(itemData.Pack.Components.equippable);
+        }
+
+        // Use Cooldown
+        if (itemData.use_cooldown) {
+            if (!convertedItem.events_settings) convertedItem.events_settings = {};
+            convertedItem.events_settings.cooldown = {
+                indicator: "VANILLA",
+                ticks: Math.round((itemData.use_cooldown.seconds || 1.0) * 20)
+            };
+        }
+
+        outputItems[itemId] = convertedItem;
+    }
+}
+
+function convertPack(pack, material, isOraxen) {
+    const resource = {
+        material: material || "PAPER"
     };
 
-    let isProcessingTextures = false;
-
-    setupModelDropZone({
-        zone: modelsDrop,
-        input: modelsInput,
-        browseBtn: modelsBrowseBtn,
-        feedbackEl: modelsFeedback,
-        async onFiles({ jsonFiles, ignoredCount }) {
-            await handleModelFiles(jsonFiles, ignoredCount);
-        },
-    });
-
-    optimizeBtn?.addEventListener("click", () => {
-        void handleTextureOptimization();
-    });
-
-    downloadBtn?.addEventListener("click", () => {
-        if (!textureState.atlasBlob || !textureState.optimizedModels.length) {
-            updateFeedbackElement(optimizeFeedback, "Gere a otimização antes de baixar.", "error");
-            return;
-        }
-        triggerTextureDownload();
-    });
-
-    function refreshTextureState() {
-        const canOptimize = textureState.modelFiles.length > 0;
-        if (optimizeBtn) {
-            optimizeBtn.disabled = !canOptimize || isProcessingTextures;
-        }
-        if (downloadBtn) {
-            downloadBtn.disabled = !textureState.atlasBlob || !textureState.optimizedModels.length;
-        }
-    }
-
-    async function handleModelFiles(bbmodelFiles, ignoredCount) {
-        textureState.modelFiles = bbmodelFiles.filter(f => f.name.toLowerCase().endsWith('.bbmodel'));
-        
-        if (textureState.modelFiles.length === 0) {
-            updateFeedbackElement(modelsFeedback, "Nenhum arquivo .bbmodel detectado.", "error");
-            if (modelsSummary) modelsSummary.textContent = "";
-            textureState.atlasBlob = null;
-            textureState.optimizedModels = [];
-            if (previewSection) previewSection.hidden = true;
-            refreshTextureState();
-            return;
-        }
-
-        const messageParts = [`${textureState.modelFiles.length} arquivo${textureState.modelFiles.length === 1 ? "" : "s"} .bbmodel carregado${textureState.modelFiles.length === 1 ? "" : "s"}.`];
-        if (ignoredCount > 0) {
-            messageParts.push(`${ignoredCount} arquivo${ignoredCount === 1 ? "" : "s"} ignorado${ignoredCount === 1 ? "" : "s"}.`);
-        }
-        updateFeedbackElement(modelsFeedback, messageParts.join(" "), "success");
-
-        if (modelsSummary) {
-            const names = textureState.modelFiles.slice(0, 3).map(f => f.name.replace('.bbmodel', '')).join(", ");
-            const suffix = textureState.modelFiles.length > 3 ? ", ..." : "";
-            modelsSummary.textContent = `${textureState.modelFiles.length} modelo${textureState.modelFiles.length === 1 ? "" : "s"} — ${names}${suffix}`;
-        }
-
-        updateFeedbackElement(optimizeFeedback, "", "");
-        textureState.atlasBlob = null;
-        textureState.optimizedModels = [];
-        if (previewSection) previewSection.hidden = true;
-        refreshTextureState();
-    }
-
-    async function handleTextureOptimization() {
-        if (isProcessingTextures || !optimizeBtn || textureState.modelFiles.length === 0) {
-            return;
-        }
-
-        isProcessingTextures = true;
-        if (textureOptimizerSection) {
-            textureOptimizerSection.setAttribute("aria-busy", "true");
-        }
-        updateFeedbackElement(optimizeFeedback, "Analisando modelos e texturas...", "info");
-        if (previewSection) previewSection.hidden = true;
-        refreshTextureState();
-
-        try {
-            // Parse all .bbmodel files
-            const models = [];
-            const texturePaths = new Set();
-            
-            console.log(`Processando ${textureState.modelFiles.length} arquivo(s) .bbmodel...`);
-            
-            for (const file of textureState.modelFiles) {
-                try {
-                    const text = await file.text();
-                    if (!text || text.trim().length === 0) {
-                        throw new Error("Arquivo vazio");
-                    }
-                    
-                    const model = JSON.parse(text);
-                    
-                    // Validate it's a Blockbench model
-                    if (!model.format_version && !model.meta && !model.elements) {
-                        console.warn(`${file.name} pode não ser um arquivo .bbmodel válido`);
-                    }
-                    
-                    const textureCountBefore = texturePaths.size;
-                    models.push({ file, model, name: file.name });
-                    
-                    // Extract texture paths from model
-                    extractTexturePaths(model, texturePaths);
-                    const texturesFound = texturePaths.size - textureCountBefore;
-                    console.log(`Modelo ${file.name} processado. ${texturesFound} textura(s) encontrada(s).`);
-                } catch (error) {
-                    console.error(`Erro ao ler ${file.name}:`, error);
-                    const errorMsg = error.message || String(error);
-                    updateFeedbackElement(optimizeFeedback, `Erro ao ler ${file.name}: ${errorMsg}`, "error");
-                    // Continue processing other files instead of throwing
-                    continue;
-                }
+    if (isOraxen) {
+        if (pack.generate_model === false) {
+            resource.generate = false;
+            if (pack.model) {
+                resource.model_path = sanitizeNamespacedString(pack.model);
             }
-
-            if (models.length === 0) {
-                updateFeedbackElement(optimizeFeedback, "Nenhum modelo válido foi encontrado.", "error");
-                return;
-            }
-
-            console.log(`Total de texturas encontradas: ${texturePaths.size}`, Array.from(texturePaths));
+        } else {
+            resource.generate = true;
             
-            if (texturePaths.size === 0) {
-                // Log model structure for debugging
-                console.error("=== DEBUG: Estrutura dos modelos ===");
-                models.forEach((m, idx) => {
-                    console.log(`\nModelo ${idx + 1}: ${m.name}`);
-                    console.log("Chaves principais:", Object.keys(m.model));
-                    console.log("Tem textures?", !!m.model.textures);
-                    console.log("Tipo de textures:", typeof m.model.textures);
-                    if (m.model.textures) {
-                        console.log("Conteúdo de textures:", m.model.textures);
-                    }
-                    console.log("Tem elements?", !!m.model.elements);
-                    console.log("Número de elements:", Array.isArray(m.model.elements) ? m.model.elements.length : 0);
-                    if (m.model.elements && m.model.elements.length > 0) {
-                        console.log("Primeiro element:", m.model.elements[0]);
-                    }
-                    console.log("Tem outliner?", !!m.model.outliner);
-                    console.log("Format version:", m.model.format_version);
-                    console.log("Meta:", m.model.meta);
-                });
-                console.error("=== FIM DEBUG ===");
+            if (pack.texture && typeof pack.texture === "string") {
+                resource.texture = sanitizeNamespacedString(pack.texture);
+            } else if (pack.textures && Array.isArray(pack.textures)) {
+                const parentModel = pack.parent_model || "";
+                const textures = convertTexturesForParentModel(pack.textures, parentModel, pack.texture);
                 
-                updateFeedbackElement(optimizeFeedback, "Nenhuma textura foi encontrada nos modelos. Verifique o console (F12) para ver a estrutura dos modelos e verifique se os modelos têm referências de textura válidas.", "error");
-                return;
-            }
-
-            updateFeedbackElement(optimizeFeedback, `Carregando ${texturePaths.size} textura${texturePaths.size === 1 ? "" : "s"}...`, "info");
-
-            // Load all textures
-            let textureData;
-            try {
-                textureData = await loadTextures(texturePaths, textureState.modelFiles);
-                console.log(`Texturas carregadas: ${textureData.size}`);
-            } catch (error) {
-                console.error("Erro ao carregar texturas:", error);
-                updateFeedbackElement(optimizeFeedback, `Erro ao carregar texturas: ${error.message}`, "error");
-                throw error;
-            }
-            
-            updateFeedbackElement(optimizeFeedback, "Detectando texturas duplicadas...", "info");
-
-            // Group similar textures
-            let textureGroups;
-            try {
-                textureGroups = groupSimilarTextures(textureData);
-                console.log(`Grupos de texturas criados: ${textureGroups.size}`);
-            } catch (error) {
-                console.error("Erro ao agrupar texturas:", error);
-                updateFeedbackElement(optimizeFeedback, `Erro ao agrupar texturas: ${error.message}`, "error");
-                throw error;
-            }
-            
-            updateFeedbackElement(optimizeFeedback, "Criando atlas de texturas...", "info");
-
-            // Create texture atlas
-            let atlasResult;
-            try {
-                atlasResult = await createTextureAtlas(textureGroups, textureData);
-                console.log(`Atlas criado: ${atlasResult.width}x${atlasResult.height}`);
-            } catch (error) {
-                console.error("Erro ao criar atlas:", error);
-                updateFeedbackElement(optimizeFeedback, `Erro ao criar atlas: ${error.message}`, "error");
-                throw error;
-            }
-            
-            updateFeedbackElement(optimizeFeedback, "Atualizando modelos...", "info");
-
-            // Update models with atlas references
-            let optimizedModels;
-            try {
-                optimizedModels = updateModelsWithAtlas(models, textureGroups, atlasResult.mapping);
-                console.log(`Modelos otimizados: ${optimizedModels.length}`);
-            } catch (error) {
-                console.error("Erro ao atualizar modelos:", error);
-                updateFeedbackElement(optimizeFeedback, `Erro ao atualizar modelos: ${error.message}`, "error");
-                throw error;
-            }
-            
-            // Create ZIP with optimized models and atlas
-            let zipBlob;
-            try {
-                zipBlob = await createOptimizedZip(optimizedModels, atlasResult.canvas);
-                console.log("ZIP criado com sucesso");
-            } catch (error) {
-                console.error("Erro ao criar ZIP:", error);
-                updateFeedbackElement(optimizeFeedback, `Erro ao criar ZIP: ${error.message}`, "error");
-                throw error;
-            }
-            
-            textureState.atlasBlob = zipBlob;
-            textureState.optimizedModels = optimizedModels;
-
-            // Render preview
-            renderTexturePreview(previewContent, {
-                modelsProcessed: models.length,
-                texturesOriginal: texturePaths.size,
-                texturesUnique: textureGroups.size,
-                texturesSaved: texturePaths.size - textureGroups.size,
-                atlasSize: `${atlasResult.canvas.width}x${atlasResult.canvas.height}`,
-            });
-
-            if (previewSection) previewSection.hidden = false;
-            if (previewSummary) {
-                previewSummary.textContent = `${models.length} modelo${models.length === 1 ? "" : "s"} otimizado${models.length === 1 ? "" : "s"} · ${textureGroups.size} textura${textureGroups.size === 1 ? "" : "s"} únicas · ${texturePaths.size - textureGroups.size} duplicada${texturePaths.size - textureGroups.size === 1 ? "" : "s"} removida${texturePaths.size - textureGroups.size === 1 ? "" : "s"}`;
-            }
-
-            updateFeedbackElement(optimizeFeedback, "Otimização concluída! Revise os resultados abaixo.", "success");
-        } catch (error) {
-            console.error("Erro ao otimizar texturas:", error);
-            console.error("Stack trace:", error.stack);
-            const errorMessage = error.message || "Erro desconhecido";
-            updateFeedbackElement(optimizeFeedback, `Erro: ${errorMessage}. Verifique o console (F12) para mais detalhes.`, "error");
-        } finally {
-            isProcessingTextures = false;
-            if (textureOptimizerSection) {
-                textureOptimizerSection.setAttribute("aria-busy", "false");
-            }
-            refreshTextureState();
-        }
-    }
-
-    function extractTexturePaths(model, texturePaths) {
-        if (!model || typeof model !== 'object') {
-            console.warn("Modelo inválido ou vazio");
-            return;
-        }
-        
-        const foundTextures = new Set();
-        
-        // Log model structure for debugging
-        console.log("Estrutura do modelo:", {
-            hasTextures: !!model.textures,
-            texturesType: model.textures ? typeof model.textures : 'none',
-            isTexturesArray: Array.isArray(model.textures),
-            hasElements: !!model.elements,
-            elementsCount: Array.isArray(model.elements) ? model.elements.length : 0,
-            hasOutliner: !!model.outliner,
-            formatVersion: model.format_version,
-            meta: model.meta ? { name: model.meta.name, version: model.meta.version } : null
-        });
-        
-        // Method 1: Direct textures object/array
-        if (model.textures) {
-            if (Array.isArray(model.textures)) {
-                // Array format - common in newer Blockbench versions
-                model.textures.forEach((texture, index) => {
-                    if (typeof texture === 'string' && texture.trim()) {
-                        foundTextures.add(texture.trim());
-                    } else if (texture && typeof texture === 'object') {
-                        // Can be {path: "...", source: "...", id: "...", ...}
-                        if (texture.path && typeof texture.path === 'string') {
-                            foundTextures.add(String(texture.path).trim());
-                        }
-                        if (texture.source && typeof texture.source === 'string') {
-                            foundTextures.add(String(texture.source).trim());
-                        }
-                        if (texture.id && typeof texture.id === 'string') {
-                            foundTextures.add(String(texture.id).trim());
-                        }
-                        // Some formats use 'name' or 'texture'
-                        if (texture.name && typeof texture.name === 'string') {
-                            foundTextures.add(String(texture.name).trim());
-                        }
-                        if (texture.texture && typeof texture.texture === 'string') {
-                            foundTextures.add(String(texture.texture).trim());
-                        }
-                    }
-                });
-            } else if (typeof model.textures === 'object') {
-                // Object format - common in older Blockbench versions
-                for (const key in model.textures) {
-                    const texture = model.textures[key];
-                    if (typeof texture === 'string' && texture.trim()) {
-                        foundTextures.add(texture.trim());
-                    } else if (texture && typeof texture === 'object') {
-                        // Can be {path: "...", source: "...", id: "...", ...}
-                        if (texture.path && typeof texture.path === 'string') {
-                            foundTextures.add(String(texture.path).trim());
-                        }
-                        if (texture.source && typeof texture.source === 'string') {
-                            foundTextures.add(String(texture.source).trim());
-                        }
-                        if (texture.id && typeof texture.id === 'string') {
-                            foundTextures.add(String(texture.id).trim());
-                        }
-                        // Some formats use the key as texture name
-                        if (!texture.path && !texture.source && !texture.id) {
-                            foundTextures.add(key.trim());
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Method 2: Check elements for texture references
-        if (Array.isArray(model.elements)) {
-            model.elements.forEach((element, elemIndex) => {
-                if (element && element.faces && typeof element.faces === 'object') {
-                    for (const faceKey in element.faces) {
-                        const face = element.faces[faceKey];
-                        if (face && face.texture !== undefined && face.texture !== null) {
-                            const texRef = face.texture;
-                            
-                            if (typeof texRef === 'number') {
-                                // Texture index reference
-                                if (model.textures && Array.isArray(model.textures)) {
-                                    const tex = model.textures[texRef];
-                                    if (typeof tex === 'string') {
-                                        foundTextures.add(tex.trim());
-                                    } else if (tex && typeof tex === 'object') {
-                                        if (tex.path) foundTextures.add(String(tex.path).trim());
-                                        if (tex.source) foundTextures.add(String(tex.source).trim());
-                                        if (tex.id) foundTextures.add(String(tex.id).trim());
-                                    }
-                                }
-                            } else if (typeof texRef === 'string') {
-                                foundTextures.add(texRef.trim());
-                            } else if (texRef && typeof texRef === 'object') {
-                                if (texRef.path) foundTextures.add(String(texRef.path).trim());
-                                if (texRef.source) foundTextures.add(String(texRef.source).trim());
-                                if (texRef.id) foundTextures.add(String(texRef.id).trim());
-                                if (texRef.uuid) foundTextures.add(String(texRef.uuid).trim());
-                            }
-                        }
-                    }
-                }
-            });
-        }
-        
-        // Method 3: Check outliner structure (Blockbench hierarchy)
-        if (model.outliner && Array.isArray(model.outliner)) {
-            function traverseOutliner(items) {
-                for (const item of items) {
-                    if (item && typeof item === 'object') {
-                        if (item.texture !== undefined && item.texture !== null) {
-                            const texRef = item.texture;
-                            if (typeof texRef === 'string') {
-                                foundTextures.add(texRef.trim());
-                            } else if (typeof texRef === 'number' && model.textures) {
-                                const tex = Array.isArray(model.textures) ? model.textures[texRef] : model.textures[texRef];
-                                if (typeof tex === 'string') {
-                                    foundTextures.add(tex.trim());
-                                } else if (tex && typeof tex === 'object') {
-                                    if (tex.path) foundTextures.add(String(tex.path).trim());
-                                    if (tex.source) foundTextures.add(String(tex.source).trim());
-                                }
-                            } else if (texRef && typeof texRef === 'object') {
-                                if (texRef.path) foundTextures.add(String(texRef.path).trim());
-                                if (texRef.source) foundTextures.add(String(texRef.source).trim());
-                            }
-                        }
-                        if (item.children && Array.isArray(item.children)) {
-                            traverseOutliner(item.children);
-                        }
-                    }
-                }
-            }
-            traverseOutliner(model.outliner);
-        }
-        
-        // Method 4: Check for texture_maps (some Blockbench formats)
-        if (model.texture_maps && typeof model.texture_maps === 'object') {
-            for (const key in model.texture_maps) {
-                const map = model.texture_maps[key];
-                if (typeof map === 'string') {
-                    foundTextures.add(map.trim());
-                } else if (map && typeof map === 'object' && map.path) {
-                    foundTextures.add(String(map.path).trim());
-                }
-            }
-        }
-        
-        // Method 5: Deep search for texture-like strings in the entire model
-        // This is a fallback for unusual formats
-        function deepSearchForTextures(obj, depth = 0) {
-            if (depth > 5) return; // Limit recursion depth
-            
-            if (typeof obj === 'string') {
-                // Check if it looks like a texture path
-                const str = obj.trim();
-                if (str && (
-                    str.endsWith('.png') || 
-                    str.endsWith('.jpg') || 
-                    str.endsWith('.jpeg') ||
-                    str.startsWith('#') ||
-                    str.includes('/') ||
-                    str.includes('\\')
-                )) {
-                    // Skip data URLs and very long strings
-                    if (!str.startsWith('data:') && str.length < 500) {
-                        foundTextures.add(str);
-                    }
-                }
-            } else if (Array.isArray(obj)) {
-                obj.forEach(item => deepSearchForTextures(item, depth + 1));
-            } else if (obj && typeof obj === 'object') {
-                for (const key in obj) {
-                    // Skip certain keys that are definitely not textures
-                    if (key === 'uuid' || key === 'name' || key === 'type' || key === 'origin' || key === 'rotation') {
-                        continue;
-                    }
-                    deepSearchForTextures(obj[key], depth + 1);
-                }
-            }
-        }
-        
-        // Only do deep search if we haven't found any textures yet
-        if (foundTextures.size === 0) {
-            console.log("Nenhuma textura encontrada pelos métodos padrão, fazendo busca profunda...");
-            deepSearchForTextures(model);
-        }
-        
-        // Add all found textures to the set
-        foundTextures.forEach(tex => {
-            // Remove # prefix if present (Blockbench texture variable syntax)
-            const cleanTex = tex.replace(/^#/, '').trim();
-            if (cleanTex) {
-                texturePaths.add(cleanTex);
-            }
-        });
-        
-        console.log(`Texturas encontradas neste modelo: ${foundTextures.size}`, Array.from(foundTextures));
-    }
-
-    async function loadTextures(texturePaths, modelFiles) {
-        const textureData = new Map();
-        const loadedTextures = new Set();
-        let loadedCount = 0;
-        let placeholderCount = 0;
-        
-        console.log(`Tentando carregar ${texturePaths.size} textura(s)...`);
-        console.log("Caminhos de texturas:", Array.from(texturePaths));
-        console.log("Arquivos disponíveis:", modelFiles.map(f => f.name || f.webkitRelativePath || 'unknown'));
-        
-        // Create a file map from model files for texture lookup
-        const fileMap = new Map();
-        const allFiles = []; // Store all files for searching
-        
-        // Collect all files from FileList/File array
-        for (const modelFile of modelFiles) {
-            const relativePath = normalizePath(getRelativePath(modelFile));
-            const fileName = relativePath.split('/').pop() || modelFile.name;
-            fileMap.set(fileName.toLowerCase(), modelFile);
-            allFiles.push(modelFile);
-        }
-        
-        // Try to load each texture
-        for (const texturePath of texturePaths) {
-            if (loadedTextures.has(texturePath)) {
-                console.log(`Textura ${texturePath} já carregada, pulando...`);
-                continue;
-            }
-            
-            let textureImage = null;
-            let loaded = false;
-            let loadError = null;
-            
-            // Clean texture path (remove # prefix if present, common in Blockbench)
-            const cleanPath = texturePath.replace(/^#/, '').trim();
-            
-            // Try to load texture as image
-            try {
-                // First, try to create image from path (if it's a data URL or absolute URL)
-                if (cleanPath.startsWith('data:') || cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
-                    textureImage = await loadImageFromURL(cleanPath);
-                    loaded = true;
-                    loadedCount++;
-                    console.log(`Textura carregada de URL: ${cleanPath}`);
+                if (textures.length === 1) {
+                    resource.texture = textures[0];
                 } else {
-                    // Try to find texture file in the dropped files
-                    const textureFileName = cleanPath.split('/').pop() || cleanPath;
-                    const textureBaseName = textureFileName.replace(/\.(png|jpg|jpeg)$/i, '').toLowerCase();
-                    
-                    // Search for matching file
-                    let textureFile = null;
-                    for (const file of allFiles) {
-                        const name = (file.webkitRelativePath || file.name || '').toLowerCase();
-                        const baseName = name.replace(/\.(png|jpg|jpeg|bbmodel)$/i, '');
-                        
-                        // Try exact match first
-                        if (name === textureFileName.toLowerCase() || name === cleanPath.toLowerCase()) {
-                            textureFile = file;
-                            break;
-                        }
-                        
-                        // Try base name match
-                        if (baseName === textureBaseName && (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg'))) {
-                            textureFile = file;
-                            break;
-                        }
-                        
-                        // Try partial match
-                        if (name.includes(textureBaseName) && (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg'))) {
-                            textureFile = file;
-                            break;
-                        }
-                    }
-                    
-                    if (textureFile) {
-                        try {
-                            const url = URL.createObjectURL(textureFile);
-                            textureImage = await loadImageFromURL(url);
-                            URL.revokeObjectURL(url);
-                            loaded = true;
-                            loadedCount++;
-                            console.log(`Textura carregada de arquivo: ${textureFile.name} (para ${texturePath})`);
-                        } catch (err) {
-                            loadError = err;
-                            console.warn(`Erro ao carregar textura do arquivo ${textureFile.name}:`, err);
-                        }
+                    resource.textures = textures;
+                }
+                if (parentModel) {
+                    resource.parent = parentModel;
+                }
+            }
+        }
+    } else {
+        // Nexo
+        if (pack.model_path) {
+            resource.generate = false;
+            resource.model_path = pack.model_path;
+            if (pack.parent_model) {
+                resource.parent = pack.parent_model;
+            }
+        } else {
+            resource.generate = true;
+            
+            if (pack.texture && typeof pack.texture === "string") {
+                resource.texture = pack.texture;
+            } else if (pack.textures && Array.isArray(pack.textures)) {
+                resource.textures = pack.textures;
+            } else {
+                // Tentar converter baseado no parent_model
+                const parentModel = pack.parent_model || "";
+                const textures = convertNexoTextures(pack, parentModel);
+                if (textures.length > 0) {
+                    if (textures.length === 1) {
+                        resource.texture = textures[0];
                     } else {
-                        console.warn(`Arquivo de textura não encontrado: ${texturePath} (procurou por: ${textureFileName})`);
-                    }
-                }
-            } catch (error) {
-                loadError = error;
-                console.warn(`Não foi possível carregar textura ${texturePath}:`, error);
-            }
-            
-            // If we couldn't load, create a placeholder
-            if (!loaded || !textureImage) {
-                const canvas = document.createElement('canvas');
-                canvas.width = 64;
-                canvas.height = 64;
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#404040';
-                ctx.fillRect(0, 0, 64, 64);
-                ctx.fillStyle = '#ffffff';
-                ctx.font = '10px monospace';
-                ctx.textAlign = 'center';
-                ctx.fillText('Missing', 32, 28);
-                const shortPath = texturePath.length > 20 ? texturePath.substring(0, 17) + '...' : texturePath;
-                ctx.fillText(shortPath, 32, 42);
-                
-                textureImage = canvas;
-                placeholderCount++;
-            }
-            
-            // Get image data
-            const canvas = document.createElement('canvas');
-            const imgWidth = textureImage.width || textureImage.naturalWidth || 64;
-            const imgHeight = textureImage.height || textureImage.naturalHeight || 64;
-            canvas.width = imgWidth;
-            canvas.height = imgHeight;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(textureImage, 0, 0);
-            
-            const textureInfo = {
-                path: texturePath,
-                image: canvas,
-                width: canvas.width,
-                height: canvas.height,
-                data: ctx.getImageData(0, 0, canvas.width, canvas.height),
-            };
-            
-            textureData.set(texturePath, textureInfo);
-            // Also store in textureState for later use
-            textureState.textureMap.set(texturePath, textureInfo);
-            
-            loadedTextures.add(texturePath);
-        }
-        
-        console.log(`Texturas carregadas: ${loadedCount} reais, ${placeholderCount} placeholders`);
-        
-        return textureData;
-    }
-
-    function loadImageFromURL(url) {
-        return new Promise((resolve, reject) => {
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = () => resolve(img);
-            img.onerror = reject;
-            img.src = url;
-        });
-    }
-
-    function groupSimilarTextures(textureData) {
-        const groups = new Map();
-        const processed = new Set();
-        
-        for (const [path, data] of textureData.entries()) {
-            if (processed.has(path)) continue;
-            
-            // Find similar textures
-            const similar = [path];
-            processed.add(path);
-            
-            for (const [otherPath, otherData] of textureData.entries()) {
-                if (processed.has(otherPath)) continue;
-                
-                // Compare textures
-                if (areTexturesSimilar(data, otherData)) {
-                    similar.push(otherPath);
-                    processed.add(otherPath);
-                }
-            }
-            
-            // Use the first path as the canonical one
-            groups.set(similar[0], similar);
-        }
-        
-        return groups;
-    }
-
-    function areTexturesSimilar(texture1, texture2, threshold = 0.95) {
-        // Simple comparison: check if images are identical or very similar
-        // For production, you'd want more sophisticated image comparison
-        
-        if (texture1.width !== texture2.width || texture1.height !== texture2.height) {
-            return false;
-        }
-        
-        const data1 = texture1.data.data;
-        const data2 = texture2.data.data;
-        
-        if (data1.length !== data2.length) {
-            return false;
-        }
-        
-        // Check if images are identical
-        let identical = true;
-        for (let i = 0; i < data1.length; i += 4) {
-            // Compare RGBA values (allow small differences for compression artifacts)
-            const diff = Math.abs(data1[i] - data2[i]) +
-                        Math.abs(data1[i+1] - data2[i+1]) +
-                        Math.abs(data1[i+2] - data2[i+2]) +
-                        Math.abs(data1[i+3] - data2[i+3]);
-            if (diff > 10) { // Threshold for "identical"
-                identical = false;
-                break;
-            }
-        }
-        
-        if (identical) return true;
-        
-        // For more sophisticated comparison, you could:
-        // 1. Calculate histogram similarity
-        // 2. Use perceptual hashing
-        // 3. Compare color distributions
-        // For now, we'll only group identical textures
-        
-        return false;
-    }
-
-    async function createTextureAtlas(textureGroups, textureDataMap) {
-        // Calculate atlas size
-        let totalArea = 0;
-        const textures = [];
-        
-        // Use the textureDataMap passed as parameter, fallback to textureState.textureMap
-        const sourceMap = textureDataMap || textureState.textureMap;
-        
-        if (sourceMap.size === 0) {
-            throw new Error("Nenhuma textura foi carregada. Verifique se as texturas estão acessíveis.");
-        }
-        
-        for (const [canonicalPath, group] of textureGroups.entries()) {
-            let textureData = sourceMap.get(canonicalPath);
-            
-            if (!textureData) {
-                console.warn(`Textura ${canonicalPath} não encontrada no mapa, criando placeholder...`);
-                // Create placeholder if missing
-                const canvas = document.createElement('canvas');
-                canvas.width = 64;
-                canvas.height = 64;
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#808080';
-                ctx.fillRect(0, 0, 64, 64);
-                
-                textureData = {
-                    path: canonicalPath,
-                    image: canvas,
-                    width: 64,
-                    height: 64,
-                    data: ctx.getImageData(0, 0, 64, 64),
-                };
-                sourceMap.set(canonicalPath, textureData);
-            }
-            
-            if (!textureData.image) {
-                throw new Error(`Textura ${canonicalPath} não tem imagem válida.`);
-            }
-            
-            textures.push({
-                path: canonicalPath,
-                group: group,
-                width: textureData.width,
-                height: textureData.height,
-                image: textureData.image,
-            });
-            
-            totalArea += textureData.width * textureData.height;
-        }
-        
-        if (textures.length === 0) {
-            throw new Error("Nenhuma textura válida para criar o atlas.");
-        }
-        
-        // Estimate atlas size (add padding)
-        const padding = 2;
-        const estimatedSize = Math.ceil(Math.sqrt(totalArea * 1.2)); // 20% overhead
-        const atlasSize = Math.pow(2, Math.ceil(Math.log2(estimatedSize))); // Power of 2
-        
-        // Create atlas canvas
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.min(atlasSize, 4096); // Max 4096
-        canvas.height = Math.min(atlasSize, 4096);
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        // Pack textures using simple bin packing
-        const mapping = new Map(); // original path -> {x, y, width, height, canonical}
-        let currentX = padding;
-        let currentY = padding;
-        let maxHeight = 0;
-        
-        for (const texture of textures) {
-            if (currentX + texture.width + padding > canvas.width) {
-                currentX = padding;
-                currentY += maxHeight + padding;
-                maxHeight = 0;
-            }
-            
-            if (currentY + texture.height + padding > canvas.height) {
-                console.warn('Atlas too small, some textures may be cut off');
-                break;
-            }
-            
-            // Draw texture to atlas
-            ctx.drawImage(texture.image, currentX, currentY);
-            
-            // Store mapping for all textures in group
-            for (const path of texture.group) {
-                mapping.set(path, {
-                    x: currentX,
-                    y: currentY,
-                    width: texture.width,
-                    height: texture.height,
-                    canonical: texture.path,
-                });
-            }
-            
-            currentX += texture.width + padding;
-            maxHeight = Math.max(maxHeight, texture.height);
-        }
-        
-        return { canvas, mapping, width: canvas.width, height: canvas.height };
-    }
-
-    function updateModelsWithAtlas(models, textureGroups, atlasMapping) {
-        const optimized = [];
-        
-        for (const { file, model, name } of models) {
-            const optimizedModel = JSON.parse(JSON.stringify(model));
-            
-            // Update texture references
-            if (optimizedModel.textures && typeof optimizedModel.textures === 'object') {
-                for (const key in optimizedModel.textures) {
-                    const originalPath = optimizedModel.textures[key];
-                    if (typeof originalPath === 'string') {
-                        const mapping = atlasMapping.get(originalPath.trim());
-                        if (mapping) {
-                            // Update to use atlas coordinates
-                            optimizedModel.textures[key] = `#${key}`; // Use texture variable
-                            // Store UV mapping in model metadata or separate file
-                        }
+                        resource.textures = textures;
                     }
                 }
             }
-            
-            optimized.push({
-                name: name,
-                model: optimizedModel,
-                originalFile: file,
-            });
         }
-        
-        return optimized;
     }
 
-    async function createOptimizedZip(optimizedModels, atlasCanvas) {
-        if (typeof JSZip === "undefined") {
-            throw new Error("JSZip não está disponível. Certifique-se de que a biblioteca JSZip foi carregada.");
-        }
-        
-        if (!atlasCanvas) {
-            throw new Error("Canvas do atlas não foi fornecido.");
-        }
-        
-        if (!optimizedModels || optimizedModels.length === 0) {
-            throw new Error("Nenhum modelo otimizado para incluir no ZIP.");
-        }
-        
-        const zip = new JSZip();
-        
-        // Add optimized models
-        const modelsFolder = zip.folder("models");
-        for (const optModel of optimizedModels) {
-            if (!optModel.name || !optModel.model) {
-                console.warn("Modelo inválido ignorado:", optModel);
-                continue;
-            }
-            try {
-                const modelJson = JSON.stringify(optModel.model, null, 2);
-                modelsFolder.file(optModel.name, modelJson);
-            } catch (error) {
-                console.error(`Erro ao serializar modelo ${optModel.name}:`, error);
-                throw new Error(`Erro ao processar modelo ${optModel.name}: ${error.message}`);
-            }
-        }
-        
-        // Add atlas texture
-        const texturesFolder = zip.folder("textures");
-        return new Promise((resolve, reject) => {
-            try {
-                atlasCanvas.toBlob((blob) => {
-                    if (!blob) {
-                        reject(new Error("Falha ao criar blob do atlas. O canvas pode estar vazio ou corrompido."));
-                        return;
-                    }
-                    // Convert blob to base64 for JSZip
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                        try {
-                            const base64Data = reader.result.split(',')[1];
-                            if (!base64Data) {
-                                reject(new Error("Falha ao converter atlas para base64."));
-                                return;
-                            }
-                            texturesFolder.file("atlas.png", base64Data, { base64: true });
-                            zip.generateAsync({ type: "blob" })
-                                .then(resolve)
-                                .catch(err => {
-                                    console.error("Erro ao gerar ZIP:", err);
-                                    reject(new Error(`Erro ao gerar arquivo ZIP: ${err.message}`));
-                                });
-                        } catch (error) {
-                            console.error("Erro ao processar blob do atlas:", error);
-                            reject(new Error(`Erro ao processar atlas: ${error.message}`));
-                        }
-                    };
-                    reader.onerror = (err) => {
-                        console.error("Erro no FileReader:", err);
-                        reject(new Error("Erro ao ler blob do atlas."));
-                    };
-                    reader.readAsDataURL(blob);
-                }, 'image/png');
-            } catch (error) {
-                console.error("Erro ao criar blob do canvas:", error);
-                reject(new Error(`Erro ao criar blob: ${error.message}`));
-            }
-        });
-    }
-
-    function triggerTextureDownload() {
-        if (!textureState.atlasBlob) return;
-        
-        const url = URL.createObjectURL(textureState.atlasBlob);
-        const anchor = document.createElement("a");
-        const dateStamp = new Date().toISOString().split("T")[0];
-        anchor.href = url;
-        anchor.download = `erisia-textures-optimized-${dateStamp}.zip`;
-        anchor.click();
-        setTimeout(() => URL.revokeObjectURL(url), 2000);
-    }
-
-    function renderTexturePreview(container, stats) {
-        if (!container) return;
-        
-        container.innerHTML = "";
-        
-        const statsDiv = document.createElement("div");
-        statsDiv.style.cssText = "display: grid; gap: 0.75rem; padding: 1rem; background: rgba(6, 10, 18, 0.9); border: 1px solid rgba(224, 160, 48, 0.25);";
-        
-        const title = document.createElement("h4");
-        title.textContent = "Estatísticas da Otimização";
-        title.style.cssText = "margin: 0 0 0.5rem; font-size: clamp(0.7rem, 1.2vw, 0.9rem); color: var(--color-accent-strong);";
-        statsDiv.appendChild(title);
-        
-        const statsList = document.createElement("ul");
-        statsList.style.cssText = "margin: 0; padding-left: 1.5rem; list-style: disc;";
-        
-        const items = [
-            `Modelos processados: ${stats.modelsProcessed}`,
-            `Texturas originais: ${stats.texturesOriginal}`,
-            `Texturas únicas: ${stats.texturesUnique}`,
-            `Texturas economizadas: ${stats.texturesSaved}`,
-            `Tamanho do atlas: ${stats.atlasSize}`,
-        ];
-        
-        items.forEach(item => {
-            const li = document.createElement("li");
-            li.textContent = item;
-            li.style.cssText = "font-size: clamp(0.55rem, 0.95vw, 0.8rem); color: var(--color-muted); margin: 0.25rem 0;";
-            statsList.appendChild(li);
-        });
-        
-        statsDiv.appendChild(statsList);
-        container.appendChild(statsDiv);
-        
-        // Add note about texture loading
-        const note = document.createElement("p");
-        note.textContent = "Nota: Para carregar texturas reais, forneça os arquivos de textura junto com os modelos ou configure o caminho das texturas.";
-        note.style.cssText = "margin: 1rem 0 0; padding: 0.75rem; background: rgba(224, 160, 48, 0.1); border-left: 3px solid var(--color-accent); font-size: clamp(0.5rem, 0.85vw, 0.7rem); color: var(--color-muted);";
-        container.appendChild(note);
-    }
-
-    refreshTextureState();
+    return resource;
 }
+
+function convertTexturesForParentModel(textures, parentModel, defaultTexture) {
+    const defaultTex = defaultTexture || (textures.length > 0 ? textures[0] : "block/missing_texture");
+    
+    const getTex = (index, def) => index < textures.length ? textures[index] : def;
+    
+    switch (parentModel) {
+        case "block/cube":
+        case "block/cube_directional":
+        case "block/cube_mirrored":
+            return [
+                getTex(2, defaultTex), // down
+                getTex(4, defaultTex), // east
+                getTex(2, defaultTex), // north
+                getTex(3, defaultTex), // south
+                getTex(1, defaultTex), // up
+                getTex(5, defaultTex)  // west
+            ];
+        case "block/cube_all":
+        case "block/cube_mirrored_all":
+            return Array(6).fill(defaultTex);
+        case "block/cube_top":
+            return [
+                getTex(1, defaultTex), // down
+                getTex(1, defaultTex), // east
+                getTex(1, defaultTex), // north
+                getTex(1, defaultTex), // south
+                getTex(0, defaultTex), // up
+                getTex(1, defaultTex)  // west
+            ];
+        case "block/cube_bottom_top":
+            return [
+                getTex(2, defaultTex), // down
+                getTex(1, defaultTex), // east
+                getTex(1, defaultTex), // north
+                getTex(1, defaultTex), // south
+                getTex(0, defaultTex), // up
+                getTex(1, defaultTex)  // west
+            ];
+        case "block/orientable":
+        case "block/orientable_with_bottom":
+        case "block/orientable_vertical":
+            const front = getTex(0, defaultTex);
+            const side = getTex(1, defaultTex);
+            const top = getTex(2, defaultTex);
+            const bottom = getTex(3, defaultTex);
+            return [
+                parentModel.endsWith("with_bottom") ? bottom : side, // down
+                side, // east
+                side, // north
+                front, // south
+                !parentModel.endsWith("vertical") ? top : front, // up
+                side  // west
+            ];
+        case "block/cube_column":
+            return [
+                getTex(0, defaultTex), // down (end)
+                getTex(1, defaultTex), // east (side)
+                getTex(1, defaultTex), // north
+                getTex(1, defaultTex), // south
+                getTex(0, defaultTex), // up (end)
+                getTex(1, defaultTex)  // west
+            ];
+        default:
+            return textures.length > 0 ? textures : [defaultTex];
+    }
+}
+
+function convertNexoTextures(pack, parentModel) {
+    const textures = [];
+    
+    switch (parentModel) {
+        case "block/cube_top":
+            if (pack.textures?.top && pack.textures?.side) {
+                return [
+                    pack.textures.side, // down
+                    pack.textures.side, // east
+                    pack.textures.side, // north
+                    pack.textures.side, // south
+                    pack.textures.top,  // up
+                    pack.textures.side  // west
+                ];
+            }
+            break;
+        case "block/cube_all":
+            if (pack.texture) {
+                return Array(6).fill(pack.texture);
+            }
+            break;
+        case "block/cube_column":
+            if (pack.textures?.side && pack.textures?.end) {
+                return [
+                    pack.textures.end,   // down
+                    pack.textures.side,  // east
+                    pack.textures.side,  // north
+                    pack.textures.side,  // south
+                    pack.textures.end,   // up
+                    pack.textures.side   // west
+                ];
+            }
+            break;
+    }
+    
+    return textures;
+}
+
+function sanitizeNamespacedString(str) {
+    if (!str || typeof str !== "string") return str;
+    if (!str.includes(":")) {
+        return "minecraft:" + str;
+    }
+    return str;
+}
+
+function convertAttributeModifiers(modifiers) {
+    if (!Array.isArray(modifiers)) return null;
+    
+    const slotMap = {};
+    
+    for (const entry of modifiers) {
+        if (typeof entry !== "object") continue;
+        
+        const attr = entry.attribute?.toLowerCase().replace("generic_", "");
+        const amount = entry.amount;
+        const op = entry.operation ?? 0;
+        const slot = (entry.slot || "HAND").toLowerCase();
+        
+        if (!attr || typeof amount !== "number") continue;
+        
+        const operation = op === 0 ? "add" : op === 1 ? "multiply" : op === 2 ? "multiply_base" : null;
+        const slotName = slot === "hand" || slot === "mainhand" ? "mainhand" :
+                        slot === "offhand" ? "offhand" :
+                        slot === "feet" ? "feet" :
+                        slot === "legs" ? "legs" :
+                        slot === "chest" ? "chest" :
+                        slot === "head" ? "head" : null;
+        
+        if (!slotName || !operation) continue;
+        
+        if (!slotMap[slotName]) slotMap[slotName] = {};
+        slotMap[slotName][attr] = {
+            operation: operation,
+            value: amount
+        };
+    }
+    
+    return Object.keys(slotMap).length > 0 ? slotMap : null;
+}
+
+function convertFurniture(furniture, itemData) {
+    const result = {};
+    
+    if (itemData.rotatable !== undefined) {
+        result.fixed_rotation = !itemData.rotatable;
+    }
+    
+    if (itemData.limited_placing) {
+        if (itemData.limited_placing.roof !== undefined) {
+            if (!result.placeable_on) result.placeable_on = {};
+            result.placeable_on.ceiling = itemData.limited_placing.roof;
+        }
+        if (itemData.limited_placing.floor !== undefined) {
+            if (!result.placeable_on) result.placeable_on = {};
+            result.placeable_on.floor = itemData.limited_placing.floor;
+        }
+        if (itemData.limited_placing.wall !== undefined) {
+            if (!result.placeable_on) result.placeable_on = {};
+            result.placeable_on.walls = itemData.limited_placing.wall;
+        }
+    }
+    
+    // Entity type
+    if (itemData.type) {
+        const type = itemData.type.toLowerCase();
+        if (type === "display_entity" || type === "item_display") {
+            result.entity = "item_display";
+        } else if (type === "armor_stand") {
+            result.entity = "armor_stand";
+        } else if (type === "item_frame") {
+            result.entity = "item_frame";
+        }
+    } else {
+        result.entity = "item_display"; // Default
+    }
+    
+    // Display transform
+    if (itemData.display_entity_properties?.display_transform) {
+        result.display_transformation = {
+            transform: itemData.display_entity_properties.display_transform
+        };
+    }
+    
+    // Block sounds
+    if (furniture.block_sounds) {
+        result.sound = {};
+        if (furniture.block_sounds.place_sound) {
+            result.sound.place = {
+                name: furniture.block_sounds.place_sound,
+                volume: 0,
+                pitch: 0
+            };
+        }
+        if (furniture.block_sounds.break_sound) {
+            result.sound.break = {
+                name: furniture.block_sounds.break_sound,
+                volume: 0,
+                pitch: 0
+            };
+        }
+    }
+    
+    // Lights
+    if (furniture.lights && Array.isArray(furniture.lights)) {
+        let maxLevel = 0;
+        for (const light of furniture.lights) {
+            if (typeof light === "string") {
+                const parts = light.split(/\s+/);
+                if (parts.length >= 4) {
+                    const level = parseInt(parts[3]);
+                    if (!isNaN(level)) {
+                        maxLevel = Math.max(maxLevel, level);
+                    }
+                }
+            }
+        }
+        if (maxLevel > 0) {
+            result.light_level = maxLevel;
+        }
+    }
+    
+    return result;
+}
+
+function convertConsumable(food, consumable) {
+    const result = {};
+    
+    if (food) {
+        if (food.nutrition !== undefined) result.nutrition = food.nutrition;
+        if (food.saturation !== undefined) result.saturation = food.saturation;
+        if (food.can_always_eat !== undefined) result.can_always_eat = food.can_always_eat;
+    }
+    
+    if (consumable) {
+        if (consumable.sound) result.sound = consumable.sound;
+        if (consumable.consume_particles !== undefined) result.particles = consumable.consume_particles;
+        if (consumable.consume_seconds !== undefined) result.consume_seconds = consumable.consume_seconds;
+        
+        if (consumable.animation) {
+            const anim = consumable.animation.toLowerCase();
+            result.animation = anim === "block" ? "block" : anim === "drink" ? "drink" : "eat";
+        }
+        
+        if (consumable.effects) {
+            result.effects = convertConsumableEffects(consumable.effects);
+        }
+    }
+    
+    return Object.keys(result).length > 0 ? result : null;
+}
+
+function convertConsumableEffects(effects) {
+    const result = {};
+    
+    if (effects.APPLY_EFFECTS) {
+        result.apply_status_effects = {
+            probability: 1,
+            effects: {}
+        };
+        
+        let id = 1;
+        for (const [effectName, effectData] of Object.entries(effects.APPLY_EFFECTS)) {
+            if (typeof effectData === "object") {
+                result.apply_status_effects.effects[`effect_${id++}`] = {
+                    potion: effectName.toUpperCase(),
+                    duration: effectData.duration ?? 20,
+                    amplifier: effectData.amplifier ?? 0,
+                    ambient: effectData.ambient ?? false,
+                    particles: effectData.particles !== false,
+                    icon: effectData.icon !== false
+                };
+            }
+        }
+    }
+    
+    if (effects.REMOVE_EFFECTS && Array.isArray(effects.REMOVE_EFFECTS)) {
+        result.remove_status_effects = {
+            effects: effects.REMOVE_EFFECTS.map(e => e.toUpperCase())
+        };
+    }
+    
+    if (effects.CLEAR_ALL_EFFECTS) {
+        result.clear_status_effects = true;
+    }
+    
+    if (effects.TELEPORT_RANDOMLY) {
+        result.teleport_randomly = {
+            diameter: effects.TELEPORT_RANDOMLY.diameter ?? 5.0
+        };
+    }
+    
+    if (effects.PLAY_SOUND) {
+        result.play_sound = {
+            sound: effects.PLAY_SOUND.sound || "entity.generic.eat"
+        };
+    }
+    
+    return Object.keys(result).length > 0 ? result : null;
+}
+
+function convertEquippable(equippable) {
+    const result = {};
+    
+    if (equippable.slot) result.slot = equippable.slot;
+    if (equippable.model) result.id = equippable.model;
+    if (equippable.camera_overlay) result.camera_overlay = equippable.camera_overlay;
+    if (equippable.equip_sound) result.equip_sound = equippable.equip_sound;
+    if (equippable.allowed_entities) result.allowed_entities = equippable.allowed_entities;
+    if (equippable.dispensable !== undefined) result.dispensable = equippable.dispensable;
+    if (equippable.swappable !== undefined) result.swappable = equippable.swappable;
+    if (equippable.damage_on_hurt !== undefined) result.damage_on_hurt = equippable.damage_on_hurt;
+    
+    return Object.keys(result).length > 0 ? result : null;
+}
+
+function mapField(source, dest, sourcePath, destPath) {
+    if (Array.isArray(sourcePath)) {
+        for (const path of sourcePath) {
+            if (source[path] !== undefined) {
+                setNestedValue(dest, destPath, source[path]);
+                return;
+            }
+        }
+    } else {
+        if (source[sourcePath] !== undefined) {
+            setNestedValue(dest, destPath, source[sourcePath]);
+        }
+    }
+}
+
+function setNestedValue(obj, path, value) {
+    const keys = path.split(".");
+    let current = obj;
+    for (let i = 0; i < keys.length - 1; i++) {
+        if (!current[keys[i]]) {
+            current[keys[i]] = {};
+        }
+        current = current[keys[i]];
+    }
+    current[keys[keys.length - 1]] = value;
+}
+
+async function processResourcePack(files, structure) {
+    const resourcePack = {};
+    const validAssetsFolders = ["models", "textures", "font", "lang", "blockstates", "shaders", "equipment", "items", "particles", "post_effect", "texts", "atlases"];
+    
+    // Filtrar arquivos do pack
+    const packFiles = files.filter(f => {
+        const path = getRelativePath(f).toLowerCase();
+        return path.includes("/pack/") || path.startsWith("pack/");
+    });
+    
+    for (const file of packFiles) {
+        const relativePath = getRelativePath(file);
+        const pathParts = relativePath.toLowerCase().split("/pack/");
+        
+        if (pathParts.length < 2) continue;
+        
+        const afterPack = pathParts[1];
+        
+        // Verificar se está em assets/minecraft ou assets/[namespace]
+        if (afterPack.startsWith("assets/minecraft/")) {
+            const assetPath = afterPack.replace("assets/minecraft/", "");
+            const firstPart = assetPath.split("/")[0];
+            
+            if (validAssetsFolders.includes(firstPart)) {
+                const outputPath = `ItemsAdder/contents/${structure.type}/resource_pack/assets/minecraft/${assetPath}`;
+                resourcePack[outputPath] = await file.arrayBuffer();
+            }
+        } else if (afterPack.startsWith("assets/")) {
+            // Outros namespaces
+            const outputPath = `ItemsAdder/contents/${structure.type}/resource_pack/${afterPack}`;
+            resourcePack[outputPath] = await file.arrayBuffer();
+        }
+    }
+    
+    return Object.keys(resourcePack).length > 0 ? resourcePack : null;
+}
+
+function displayConverterResult(result) {
+    converterSourceInfo.textContent = `Tipo detectado: ${result.type.toUpperCase()}`;
+    converterFileCount.textContent = `${result.stats.itemsConverted} itens convertidos${result.stats.hasResourcePack ? " + Resource Pack" : ""}`;
+    
+    const summary = document.createElement("div");
+    summary.className = "converter-summary-content";
+    summary.innerHTML = `
+        <h4>Resumo da conversão:</h4>
+        <ul>
+            <li><strong>Plugin origem:</strong> ${result.type.toUpperCase()}</li>
+            <li><strong>Itens convertidos:</strong> ${result.stats.itemsConverted}</li>
+            <li><strong>Resource Pack:</strong> ${result.stats.hasResourcePack ? "Incluído" : "Não encontrado"}</li>
+        </ul>
+        <p class="hint">O arquivo ZIP está pronto para ser extraído em <code>plugins/ItemsAdder/contents/</code></p>
+    `;
+    
+    converterSummary.innerHTML = "";
+    converterSummary.appendChild(summary);
+}
+
+function showConverterFeedback(message, variant) {
+    converterFeedback.textContent = message;
+    converterFeedback.dataset.variant = variant;
+}
+
+function setConverterBusyState(isBusy) {
+    converterDropZone.classList.toggle("is-busy", isBusy);
+    converterDropZone.setAttribute("aria-busy", isBusy ? "true" : "false");
+    converterBrowseBtn.disabled = isBusy;
+}
+
