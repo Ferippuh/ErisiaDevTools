@@ -430,6 +430,45 @@ textarea:focus {
     }
 }
 
+.converter-summary {
+    margin-top: 1rem;
+    padding: 1rem;
+    background-color: rgba(5, 8, 14, 0.5);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+}
+
+.converter-summary-content {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.converter-summary-content h4 {
+    margin: 0;
+    font-size: clamp(0.7rem, 1.5vw, 0.9rem);
+    color: var(--color-accent-strong);
+}
+
+.converter-summary-content ul {
+    margin: 0;
+    padding-left: 1.5rem;
+    display: grid;
+    gap: 0.5rem;
+    font-size: clamp(0.55rem, 0.95vw, 0.75rem);
+    color: var(--color-muted);
+}
+
+.converter-summary-content li {
+    list-style-type: disc;
+}
+
+.converter-summary-content .hint {
+    margin: 0;
+    font-size: clamp(0.5rem, 0.85vw, 0.7rem);
+    color: var(--color-muted);
+    font-style: italic;
+}
+
 .hero-tutorial {
     border: 2px solid var(--color-border);
     background-color: rgba(9, 13, 22, 0.9);
