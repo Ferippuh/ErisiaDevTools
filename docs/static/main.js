@@ -1,914 +1,1094 @@
-// Conversor Nexo/Oraxen para ItemsAdder
-const converterDropZone = document.getElementById("converter-drop-zone");
-const converterBrowseBtn = document.getElementById("converter-browse-btn");
-const converterDirectoryPicker = document.getElementById("converter-directory-picker");
-const converterFeedback = document.getElementById("converter-feedback");
-const converterResult = document.getElementById("converter-result");
-const converterSourceInfo = document.getElementById("converter-source-info");
-const converterFileCount = document.getElementById("converter-file-count");
-const converterDownloadBtn = document.getElementById("converter-download-btn");
-const converterSummary = document.getElementById("converter-summary");
+const dropZone = document.getElementById("drop-zone");
+const browseBtn = document.getElementById("browse-btn");
+const directoryPicker = document.getElementById("directory-picker");
+const feedback = document.getElementById("feedback");
+const resultSection = document.getElementById("result");
+const jsonOutput = document.getElementById("json-output");
+const fileCount = document.getElementById("file-count");
+const downloadBtn = document.getElementById("download-btn");
+const sourceInfo = document.getElementById("source-info");
 
-let convertedFiles = null;
-let isConverting = false;
+let lastJsonText = "";
+let isProcessing = false;
 
-converterBrowseBtn.addEventListener("click", () => converterDirectoryPicker.click());
-converterDirectoryPicker.addEventListener("change", async (event) => {
+browseBtn.addEventListener("click", () => directoryPicker.click());
+directoryPicker.addEventListener("change", async (event) => {
     const files = [...event.target.files];
-    await processConverterFiles(files);
-    converterDirectoryPicker.value = "";
+    const sourceLabel = detectSourceFromFiles(files);
+    await processFiles(files, sourceLabel);
+    directoryPicker.value = "";
 });
 
-converterDropZone.addEventListener("click", (event) => {
-    if (event.target === converterDropZone || event.target.closest(".drop-zone__content")) {
-        converterDirectoryPicker.click();
+dropZone.addEventListener("click", (event) => {
+    if (event.target === dropZone) {
+        directoryPicker.click();
     }
 });
 
-converterDropZone.addEventListener("keydown", (event) => {
+dropZone.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        converterDirectoryPicker.click();
+        directoryPicker.click();
     }
 });
 
-converterDropZone.addEventListener("dragover", (event) => {
+dropZone.addEventListener("dragover", (event) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
-    converterDropZone.classList.add("is-dragover");
+    dropZone.classList.add("is-dragover");
 });
 
-converterDropZone.addEventListener("dragleave", (event) => {
-    if (!converterDropZone.contains(event.relatedTarget)) {
-        converterDropZone.classList.remove("is-dragover");
+dropZone.addEventListener("dragleave", (event) => {
+    if (!dropZone.contains(event.relatedTarget)) {
+        dropZone.classList.remove("is-dragover");
     }
 });
 
-converterDropZone.addEventListener("drop", async (event) => {
+dropZone.addEventListener("drop", async (event) => {
     event.preventDefault();
-    converterDropZone.classList.remove("is-dragover");
+    dropZone.classList.remove("is-dragover");
 
     const dataTransfer = event.dataTransfer;
     const files = await extractFilesFromDataTransfer(dataTransfer);
-    await processConverterFiles(files);
+    const sourceLabel = detectSourceFromDataTransfer(dataTransfer, files);
+    await processFiles(files, sourceLabel);
 });
 
-converterDownloadBtn.addEventListener("click", async () => {
-    if (!convertedFiles) {
-        showConverterFeedback("Nada para baixar ainda.", "error");
+downloadBtn.addEventListener("click", () => {
+    if (!lastJsonText) {
+        showFeedback("Nada para baixar ainda.", "error");
         return;
     }
 
-    try {
-        showConverterFeedback("Criando arquivo ZIP...", "info");
-        const zip = new JSZip();
-        
-        // Adicionar arquivos convertidos
-        for (const [path, content] of Object.entries(convertedFiles.files)) {
-            zip.file(path, content);
-        }
-
-        // Adicionar resource pack se existir
-        if (convertedFiles.resourcePack) {
-            for (const [path, content] of Object.entries(convertedFiles.resourcePack)) {
-                zip.file(path, content);
-            }
-        }
-
-        const blob = await zip.generateAsync({ type: "blob" });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = `ItemsAdder_${convertedFiles.type}_converted.zip`;
-        anchor.click();
-        URL.revokeObjectURL(url);
-        showConverterFeedback("Download iniciado!", "success");
-    } catch (error) {
-        console.error("Erro ao criar ZIP:", error);
-        showConverterFeedback("Erro ao criar arquivo ZIP.", "error");
-    }
+    const blob = new Blob([lastJsonText], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "sounds.json";
+    anchor.click();
+    URL.revokeObjectURL(url);
 });
 
-async function processConverterFiles(files) {
-    if (isConverting) {
+async function processFiles(files, sourceLabel = "") {
+    if (isProcessing) {
         return;
     }
 
     if (!files || !files.length) {
-        showConverterFeedback("Nenhum arquivo foi recebido.", "error");
+        showFeedback("Nenhum arquivo foi recebido.", "error");
         return;
     }
 
-    isConverting = true;
-    setConverterBusyState(true);
-    showConverterFeedback("Analisando estrutura da pasta...", "info");
-    converterResult.hidden = true;
+    isProcessing = true;
+    setBusyState(true);
+    showFeedback("Processando arquivos...", "info");
 
     try {
-        // Detectar tipo (Nexo ou Oraxen) e estrutura
-        const structure = analyzeStructure(files);
-        
-        if (!structure.type) {
-            showConverterFeedback("Não foi possível detectar se é Nexo ou Oraxen. Certifique-se de que a pasta contém uma pasta 'items'.", "error");
+        const { entries, totalSounds } = buildSoundEntries(files);
+
+        if (!totalSounds) {
+            resultSection.hidden = true;
+            if (fileCount) {
+                fileCount.hidden = true;
+            }
+            showFeedback("Nenhum arquivo .ogg foi encontrado.", "error");
             return;
         }
 
-        showConverterFeedback(`Detectado: ${structure.type.toUpperCase()}. Convertendo arquivos...`, "info");
-
-        // Converter itens
-        const convertedItems = await convertItems(files, structure);
-        
-        // Processar resource pack se existir
-        let resourcePack = null;
-        if (structure.hasPack) {
-            showConverterFeedback("Processando resource pack...", "info");
-            resourcePack = await processResourcePack(files, structure);
+        const jsonText = buildJsonFromEntries(entries);
+        lastJsonText = jsonText;
+        jsonOutput.value = jsonText;
+        if (fileCount) {
+            fileCount.hidden = false;
+            fileCount.textContent = `Total de sons: ${totalSounds}`;
         }
-
-        convertedFiles = {
-            type: structure.type,
-            files: convertedItems,
-            resourcePack: resourcePack,
-            stats: {
-                itemsConverted: Object.keys(convertedItems).length,
-                hasResourcePack: !!resourcePack
-            }
-        };
-
-        // Mostrar resultado
-        displayConverterResult(convertedFiles);
-        converterResult.hidden = false;
-        showConverterFeedback("Conversão concluída com sucesso!", "success");
+        sourceInfo.textContent = sourceLabel ? `Fonte: ${sourceLabel}` : "";
+        sourceInfo.hidden = !sourceLabel;
+        resultSection.hidden = false;
+        showFeedback(`Encontrados ${totalSounds} arquivos .ogg.`, "success");
     } catch (error) {
-        console.error("Erro na conversão:", error);
-        showConverterFeedback(`Erro durante a conversão: ${error.message}`, "error");
+        console.error(error);
+        resultSection.hidden = true;
+        if (fileCount) {
+            fileCount.hidden = true;
+        }
+        showFeedback("Erro ao processar os arquivos.", "error");
     } finally {
-        isConverting = false;
-        setConverterBusyState(false);
+        isProcessing = false;
+        setBusyState(false);
     }
 }
 
-function analyzeStructure(files) {
-    const structure = {
-        type: null,
-        hasItems: false,
-        hasPack: false,
-        itemsPath: null,
-        packPath: null
-    };
+function buildSoundEntries(files) {
+    const grouped = new Map();
+    let totalSounds = 0;
 
-    // Procurar pasta items
     for (const file of files) {
-        const path = getRelativePath(file).toLowerCase();
-        
-        if (path.includes("/items/") || path.startsWith("items/")) {
-            structure.hasItems = true;
-            structure.itemsPath = path.split("/items/")[0] || "";
-            
-            // Detectar tipo baseado no caminho
-            if (path.includes("/nexo/") || path.startsWith("nexo/")) {
-                structure.type = "nexo";
-            } else if (path.includes("/oraxen/") || path.startsWith("oraxen/")) {
-                structure.type = "oraxen";
+        const relativePath = getRelativePath(file);
+        if (!relativePath || !relativePath.toLowerCase().endsWith(".ogg")) {
+            continue;
+        }
+
+        const normalized = normalizePath(relativePath);
+        const withoutExt = normalized.replace(/\.ogg$/i, "");
+        const segments = withoutExt.split("/").filter(Boolean);
+        if (!segments.length) {
+            continue;
+        }
+
+        const key = deriveKeyFromSegments(segments);
+        const soundPath = withoutExt;
+
+        if (!grouped.has(key)) {
+            grouped.set(key, new Set());
+        }
+
+        const set = grouped.get(key);
+        if (!set.has(soundPath)) {
+            set.add(soundPath);
+            totalSounds += 1;
+        }
+    }
+
+    const entries = Array.from(grouped.entries())
+        .map(([key, soundSet]) => ({
+            key,
+            sounds: Array.from(soundSet).sort((a, b) => naturalCompare(a, b)),
+        }))
+        .sort((a, b) => a.key.localeCompare(b.key));
+
+    return { entries, totalSounds };
+}
+
+function deriveKeyFromSegments(segments) {
+    const folderSegments = segments.slice(0, -1).map((segment) => segment.replace(/_/g, ""));
+    const fileSegment = segments[segments.length - 1];
+    const { baseName } = splitVariantFromName(fileSegment);
+
+    return [...folderSegments, baseName].filter(Boolean).join(".");
+}
+
+function splitVariantFromName(name) {
+    const match = name.match(/^(.*?)(?:_(\d+))?$/);
+    if (!match) {
+        return { baseName: name, variant: null };
+    }
+
+    const baseName = match[1] || name;
+    const variant = match[2] ? Number(match[2]) : null;
+    return { baseName, variant };
+}
+
+function buildJsonFromEntries(entries) {
+    const payload = {};
+
+    for (const { key, sounds } of entries) {
+        payload[key] = {
+            sounds,
+        };
+    }
+
+    return JSON.stringify(payload, null, 2);
+}
+
+function naturalCompare(a, b) {
+    return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+}
+
+function getRelativePath(file) {
+    if (!file) {
+        return "";
+    }
+
+    return (
+        file.webkitRelativePath ||
+        file.relativePath ||
+        file._relativePath ||
+        file.name ||
+        ""
+    );
+}
+
+function normalizePath(path) {
+    return path
+        .replace(/^\.+[\\/]/, "")
+        .replace(/^[\\/]+/, "")
+        .replace(/\\/g, "/");
+}
+
+function showFeedback(message, variant) {
+    feedback.textContent = message;
+    feedback.dataset.variant = variant;
+}
+
+function setBusyState(isBusy) {
+    dropZone.classList.toggle("is-busy", isBusy);
+    dropZone.setAttribute("aria-busy", isBusy ? "true" : "false");
+    browseBtn.disabled = isBusy;
+}
+
+async function extractFilesFromDataTransfer(dataTransfer) {
+    const files = [];
+
+    if (dataTransfer.items && dataTransfer.items.length) {
+        const entries = [];
+
+        for (const item of dataTransfer.items) {
+            if (item.kind !== "file") {
+                continue;
+            }
+
+            const entry = item.webkitGetAsEntry?.();
+            if (entry) {
+                entries.push(entry);
             } else {
-                // Tentar detectar pelo conteúdo ou estrutura
-                // Por padrão, assumir Oraxen (mais comum)
-                structure.type = "oraxen";
-            }
-            break;
-        }
-    }
-
-    // Procurar pasta pack
-    for (const file of files) {
-        const path = getRelativePath(file).toLowerCase();
-        if (path.includes("/pack/") || path.startsWith("pack/")) {
-            structure.hasPack = true;
-            structure.packPath = path.split("/pack/")[0] || "";
-            break;
-        }
-    }
-
-    return structure;
-}
-
-async function convertItems(files, structure) {
-    const converted = {};
-    const itemsFiles = files.filter(f => {
-        const path = getRelativePath(f).toLowerCase();
-        return (path.includes("/items/") || path.startsWith("items/")) && 
-               f.name.endsWith(".yml") || f.name.endsWith(".yaml");
-    });
-
-    for (const file of itemsFiles) {
-        try {
-            const text = await file.text();
-            const sourceConfig = jsyaml.load(text);
-            
-            if (!sourceConfig) continue;
-
-            const outputConfig = {
-                info: {
-                    namespace: structure.type,
-                    converted_from: structure.type
-                },
-                items: {}
-            };
-
-            // Converter usando o conversor apropriado
-            if (structure.type === "oraxen") {
-                convertOraxenItems(sourceConfig, outputConfig.items, file.name);
-            } else {
-                convertNexoItems(sourceConfig, outputConfig.items, file.name);
-            }
-
-            // Determinar caminho de saída
-            const relativePath = getRelativePath(file);
-            const itemsIndex = relativePath.toLowerCase().indexOf("/items/");
-            const fileName = file.name;
-            const outputPath = `ItemsAdder/contents/${structure.type}/${fileName}`;
-
-            converted[outputPath] = jsyaml.dump(outputConfig, { 
-                lineWidth: -1,
-                quotingType: '"',
-                forceQuotes: false
-            });
-        } catch (error) {
-            console.warn(`Erro ao converter ${file.name}:`, error);
-        }
-    }
-
-    return converted;
-}
-
-function convertOraxenItems(sourceConfig, outputItems, fileName) {
-    // Obter seção de itens do source
-    const sourceItems = sourceConfig.items || sourceConfig;
-    
-    for (const [itemId, itemData] of Object.entries(sourceItems)) {
-        if (typeof itemData !== "object" || !itemData) continue;
-
-        const convertedItem = {};
-        
-        // Mapeamentos básicos
-        mapField(itemData, convertedItem, ["customname", "displayname", "itemname"], "name");
-        mapField(itemData, convertedItem, "lore", "lore");
-        mapField(itemData, convertedItem, "permission", "permission_suffix");
-        mapField(itemData, convertedItem, "unbreakable", "durability.unbreakable");
-        mapField(itemData, convertedItem, "ItemFlags", "item_flags");
-        mapField(itemData, convertedItem, "Enchantments", "enchantments");
-        mapField(itemData, convertedItem, "hide_tooltip", "hide_tooltip");
-        mapField(itemData, convertedItem, "enchantment_glint_override", "glint");
-
-        // Pack/Resource
-        if (itemData.Pack) {
-            convertedItem.resource = convertPack(itemData.Pack, itemData.material || "PAPER", true);
-        } else if (itemData.material) {
-            convertedItem.resource = {
-                material: itemData.material,
-                generate: true
-            };
-        }
-
-        // Custom Model Data
-        if (itemData.Pack?.custom_model_data !== undefined) {
-            if (!convertedItem.resource) convertedItem.resource = {};
-            convertedItem.resource.custom_model_data = itemData.Pack.custom_model_data;
-        }
-
-        // Attribute Modifiers
-        if (itemData.AttributeModifiers) {
-            convertedItem.attribute_modifiers = convertAttributeModifiers(itemData.AttributeModifiers);
-        }
-
-        // Furniture
-        if (itemData.Mechanics?.furniture) {
-            if (!convertedItem.behaviours) convertedItem.behaviours = {};
-            convertedItem.behaviours.furniture = convertFurniture(itemData.Mechanics.furniture, itemData);
-        }
-
-        // Consumable/Food
-        if (itemData.food || itemData.consumable) {
-            convertedItem.consumable = convertConsumable(itemData.food, itemData.consumable);
-        }
-
-        // Durability
-        if (itemData.Components?.durability !== undefined) {
-            const durability = itemData.Components.durability?.value ?? itemData.Components.durability;
-            if (typeof durability === "number") {
-                convertedItem.durability = { max_durability: durability };
-            }
-        }
-
-        // Template/Variant
-        if (itemData.template !== undefined) {
-            if (typeof itemData.template === "string") {
-                convertedItem.variant_of = itemData.template;
-            } else if (typeof itemData.template === "boolean") {
-                convertedItem.template = itemData.template;
-            }
-        }
-
-        // Disable Enchanting
-        if (itemData.disable_enchanting) {
-            convertedItem.blocked_enchants = ["all"];
-        }
-
-        // Equippable
-        if (itemData.Pack?.Components?.equippable) {
-            convertedItem.equippable = convertEquippable(itemData.Pack.Components.equippable);
-        }
-
-        // Use Cooldown
-        if (itemData.use_cooldown) {
-            if (!convertedItem.events_settings) convertedItem.events_settings = {};
-            convertedItem.events_settings.cooldown = {
-                indicator: "VANILLA",
-                ticks: Math.round((itemData.use_cooldown.seconds || 1.0) * 20)
-            };
-        }
-
-        // Big Mining
-        if (itemData.Mechanics?.bigmining) {
-            if (!convertedItem.events) convertedItem.events = {};
-            if (!convertedItem.events.block_break) convertedItem.events.block_break = {};
-            convertedItem.events.block_break.multiple_break = {
-                size: itemData.Mechanics.bigmining.radius || 1,
-                depth: itemData.Mechanics.bigmining.depth || 1,
-                drop_all_blocks: {
-                    enabled: true
-                }
-            };
-        }
-
-        outputItems[itemId] = convertedItem;
-    }
-}
-
-function convertNexoItems(sourceConfig, outputItems, fileName) {
-    // Similar ao Oraxen, mas com algumas diferenças
-    const sourceItems = sourceConfig.items || sourceConfig;
-    
-    for (const [itemId, itemData] of Object.entries(sourceItems)) {
-        if (typeof itemData !== "object" || !itemData) continue;
-
-        const convertedItem = {};
-        
-        // Mapeamentos básicos (mesmos do Oraxen)
-        mapField(itemData, convertedItem, ["customname", "displayname", "itemname"], "name");
-        mapField(itemData, convertedItem, "lore", "lore");
-        mapField(itemData, convertedItem, "permission", "permission_suffix");
-        mapField(itemData, convertedItem, "unbreakable", "durability.unbreakable");
-        mapField(itemData, convertedItem, "ItemFlags", "item_flags");
-        mapField(itemData, convertedItem, "Enchantments", "enchantments");
-        mapField(itemData, convertedItem, "hide_tooltip", "hide_tooltip");
-        mapField(itemData, convertedItem, "enchantment_glint_override", "glint");
-
-        // Pack/Resource
-        if (itemData.Pack) {
-            convertedItem.resource = convertPack(itemData.Pack, itemData.material || "PAPER", false);
-        }
-
-        // Custom Model Data
-        if (itemData.Pack?.custom_model_data !== undefined) {
-            if (!convertedItem.resource) convertedItem.resource = {};
-            convertedItem.resource.custom_model_data = itemData.Pack.custom_model_data;
-        }
-
-        // Attribute Modifiers
-        if (itemData.AttributeModifiers) {
-            convertedItem.attribute_modifiers = convertAttributeModifiers(itemData.AttributeModifiers);
-        }
-
-        // Furniture
-        if (itemData.Mechanics?.furniture) {
-            if (!convertedItem.behaviours) convertedItem.behaviours = {};
-            convertedItem.behaviours.furniture = convertFurniture(itemData.Mechanics.furniture, itemData);
-        }
-
-        // Consumable/Food
-        if (itemData.food || itemData.consumable) {
-            convertedItem.consumable = convertConsumable(itemData.food, itemData.consumable);
-        }
-
-        // Durability (Nexo usa formato diferente)
-        if (itemData.durability !== undefined) {
-            const durability = itemData.durability?.value ?? itemData.durability;
-            if (typeof durability === "number") {
-                convertedItem.durability = { max_custom_durability: durability };
-            }
-        }
-
-        // Template/Variant
-        if (itemData.template !== undefined) {
-            if (typeof itemData.template === "string") {
-                convertedItem.variant_of = itemData.template;
-            } else if (typeof itemData.template === "boolean") {
-                convertedItem.template = itemData.template;
-            }
-        }
-
-        // Disable Enchanting
-        if (itemData.disable_enchanting) {
-            convertedItem.blocked_enchants = ["all"];
-        }
-
-        // Equippable
-        if (itemData.Pack?.Components?.equippable) {
-            convertedItem.equippable = convertEquippable(itemData.Pack.Components.equippable);
-        }
-
-        // Use Cooldown
-        if (itemData.use_cooldown) {
-            if (!convertedItem.events_settings) convertedItem.events_settings = {};
-            convertedItem.events_settings.cooldown = {
-                indicator: "VANILLA",
-                ticks: Math.round((itemData.use_cooldown.seconds || 1.0) * 20)
-            };
-        }
-
-        outputItems[itemId] = convertedItem;
-    }
-}
-
-function convertPack(pack, material, isOraxen) {
-    const resource = {
-        material: material || "PAPER"
-    };
-
-    if (isOraxen) {
-        if (pack.generate_model === false) {
-            resource.generate = false;
-            if (pack.model) {
-                resource.model_path = sanitizeNamespacedString(pack.model);
-            }
-        } else {
-            resource.generate = true;
-            
-            if (pack.texture && typeof pack.texture === "string") {
-                resource.texture = sanitizeNamespacedString(pack.texture);
-            } else if (pack.textures && Array.isArray(pack.textures)) {
-                const parentModel = pack.parent_model || "";
-                const textures = convertTexturesForParentModel(pack.textures, parentModel, pack.texture);
-                
-                if (textures.length === 1) {
-                    resource.texture = textures[0];
-                } else {
-                    resource.textures = textures;
-                }
-                if (parentModel) {
-                    resource.parent = parentModel;
+                const file = item.getAsFile?.();
+                if (file) {
+                    files.push(file);
                 }
             }
         }
-    } else {
-        // Nexo
-        if (pack.model_path) {
-            resource.generate = false;
-            resource.model_path = pack.model_path;
-            if (pack.parent_model) {
-                resource.parent = pack.parent_model;
-            }
-        } else {
-            resource.generate = true;
-            
-            if (pack.texture && typeof pack.texture === "string") {
-                resource.texture = pack.texture;
-            } else if (pack.textures && Array.isArray(pack.textures)) {
-                resource.textures = pack.textures;
-            } else {
-                // Tentar converter baseado no parent_model
-                const parentModel = pack.parent_model || "";
-                const textures = convertNexoTextures(pack, parentModel);
-                if (textures.length > 0) {
-                    if (textures.length === 1) {
-                        resource.texture = textures[0];
-                    } else {
-                        resource.textures = textures;
-                    }
-                }
-            }
+
+        for (const entry of entries) {
+            await walkFileTree(entry, files);
         }
     }
 
-    return resource;
+    if (!files.length && dataTransfer.files && dataTransfer.files.length) {
+        files.push(...dataTransfer.files);
+    }
+
+    return files;
 }
 
-function convertTexturesForParentModel(textures, parentModel, defaultTexture) {
-    const defaultTex = defaultTexture || (textures.length > 0 ? textures[0] : "block/missing_texture");
-    
-    const getTex = (index, def) => index < textures.length ? textures[index] : def;
-    
-    switch (parentModel) {
-        case "block/cube":
-        case "block/cube_directional":
-        case "block/cube_mirrored":
-            return [
-                getTex(2, defaultTex), // down
-                getTex(4, defaultTex), // east
-                getTex(2, defaultTex), // north
-                getTex(3, defaultTex), // south
-                getTex(1, defaultTex), // up
-                getTex(5, defaultTex)  // west
-            ];
-        case "block/cube_all":
-        case "block/cube_mirrored_all":
-            return Array(6).fill(defaultTex);
-        case "block/cube_top":
-            return [
-                getTex(1, defaultTex), // down
-                getTex(1, defaultTex), // east
-                getTex(1, defaultTex), // north
-                getTex(1, defaultTex), // south
-                getTex(0, defaultTex), // up
-                getTex(1, defaultTex)  // west
-            ];
-        case "block/cube_bottom_top":
-            return [
-                getTex(2, defaultTex), // down
-                getTex(1, defaultTex), // east
-                getTex(1, defaultTex), // north
-                getTex(1, defaultTex), // south
-                getTex(0, defaultTex), // up
-                getTex(1, defaultTex)  // west
-            ];
-        case "block/orientable":
-        case "block/orientable_with_bottom":
-        case "block/orientable_vertical":
-            const front = getTex(0, defaultTex);
-            const side = getTex(1, defaultTex);
-            const top = getTex(2, defaultTex);
-            const bottom = getTex(3, defaultTex);
-            return [
-                parentModel.endsWith("with_bottom") ? bottom : side, // down
-                side, // east
-                side, // north
-                front, // south
-                !parentModel.endsWith("vertical") ? top : front, // up
-                side  // west
-            ];
-        case "block/cube_column":
-            return [
-                getTex(0, defaultTex), // down (end)
-                getTex(1, defaultTex), // east (side)
-                getTex(1, defaultTex), // north
-                getTex(1, defaultTex), // south
-                getTex(0, defaultTex), // up (end)
-                getTex(1, defaultTex)  // west
-            ];
-        default:
-            return textures.length > 0 ? textures : [defaultTex];
+async function walkFileTree(entry, files) {
+    if (entry.isFile) {
+        const file = await entryToFile(entry);
+        if (file) {
+            files.push(file);
+        }
+        return;
     }
-}
 
-function convertNexoTextures(pack, parentModel) {
-    const textures = [];
-    
-    switch (parentModel) {
-        case "block/cube_top":
-            if (pack.textures?.top && pack.textures?.side) {
-                return [
-                    pack.textures.side, // down
-                    pack.textures.side, // east
-                    pack.textures.side, // north
-                    pack.textures.side, // south
-                    pack.textures.top,  // up
-                    pack.textures.side  // west
-                ];
-            }
-            break;
-        case "block/cube_all":
-            if (pack.texture) {
-                return Array(6).fill(pack.texture);
-            }
-            break;
-        case "block/cube_column":
-            if (pack.textures?.side && pack.textures?.end) {
-                return [
-                    pack.textures.end,   // down
-                    pack.textures.side,  // east
-                    pack.textures.side,  // north
-                    pack.textures.side,  // south
-                    pack.textures.end,   // up
-                    pack.textures.side   // west
-                ];
-            }
-            break;
-    }
-    
-    return textures;
-}
+    if (entry.isDirectory) {
+        const reader = entry.createReader();
 
-function sanitizeNamespacedString(str) {
-    if (!str || typeof str !== "string") return str;
-    if (!str.includes(":")) {
-        return "minecraft:" + str;
-    }
-    return str;
-}
-
-function convertAttributeModifiers(modifiers) {
-    if (!Array.isArray(modifiers)) return null;
-    
-    const slotMap = {};
-    
-    for (const entry of modifiers) {
-        if (typeof entry !== "object") continue;
-        
-        const attr = entry.attribute?.toLowerCase().replace("generic_", "");
-        const amount = entry.amount;
-        const op = entry.operation ?? 0;
-        const slot = (entry.slot || "HAND").toLowerCase();
-        
-        if (!attr || typeof amount !== "number") continue;
-        
-        const operation = op === 0 ? "add" : op === 1 ? "multiply" : op === 2 ? "multiply_base" : null;
-        const slotName = slot === "hand" || slot === "mainhand" ? "mainhand" :
-                        slot === "offhand" ? "offhand" :
-                        slot === "feet" ? "feet" :
-                        slot === "legs" ? "legs" :
-                        slot === "chest" ? "chest" :
-                        slot === "head" ? "head" : null;
-        
-        if (!slotName || !operation) continue;
-        
-        if (!slotMap[slotName]) slotMap[slotName] = {};
-        slotMap[slotName][attr] = {
-            operation: operation,
-            value: amount
-        };
-    }
-    
-    return Object.keys(slotMap).length > 0 ? slotMap : null;
-}
-
-function convertFurniture(furniture, itemData) {
-    const result = {};
-    
-    if (itemData.rotatable !== undefined) {
-        result.fixed_rotation = !itemData.rotatable;
-    }
-    
-    if (itemData.limited_placing) {
-        if (itemData.limited_placing.roof !== undefined) {
-            if (!result.placeable_on) result.placeable_on = {};
-            result.placeable_on.ceiling = itemData.limited_placing.roof;
-        }
-        if (itemData.limited_placing.floor !== undefined) {
-            if (!result.placeable_on) result.placeable_on = {};
-            result.placeable_on.floor = itemData.limited_placing.floor;
-        }
-        if (itemData.limited_placing.wall !== undefined) {
-            if (!result.placeable_on) result.placeable_on = {};
-            result.placeable_on.walls = itemData.limited_placing.wall;
-        }
-    }
-    
-    // Entity type
-    if (itemData.type) {
-        const type = itemData.type.toLowerCase();
-        if (type === "display_entity" || type === "item_display") {
-            result.entity = "item_display";
-        } else if (type === "armor_stand") {
-            result.entity = "armor_stand";
-        } else if (type === "item_frame") {
-            result.entity = "item_frame";
-        }
-    } else {
-        result.entity = "item_display"; // Default
-    }
-    
-    // Display transform
-    if (itemData.display_entity_properties?.display_transform) {
-        result.display_transformation = {
-            transform: itemData.display_entity_properties.display_transform
-        };
-    }
-    
-    // Block sounds
-    if (furniture.block_sounds) {
-        result.sound = {};
-        if (furniture.block_sounds.place_sound) {
-            result.sound.place = {
-                name: furniture.block_sounds.place_sound,
-                volume: 0,
-                pitch: 0
-            };
-        }
-        if (furniture.block_sounds.break_sound) {
-            result.sound.break = {
-                name: furniture.block_sounds.break_sound,
-                volume: 0,
-                pitch: 0
-            };
-        }
-    }
-    
-    // Lights
-    if (furniture.lights && Array.isArray(furniture.lights)) {
-        let maxLevel = 0;
-        for (const light of furniture.lights) {
-            if (typeof light === "string") {
-                const parts = light.split(/\s+/);
-                if (parts.length >= 4) {
-                    const level = parseInt(parts[3]);
-                    if (!isNaN(level)) {
-                        maxLevel = Math.max(maxLevel, level);
-                    }
-                }
-            }
-        }
-        if (maxLevel > 0) {
-            result.light_level = maxLevel;
-        }
-    }
-    
-    return result;
-}
-
-function convertConsumable(food, consumable) {
-    const result = {};
-    
-    if (food) {
-        if (food.nutrition !== undefined) result.nutrition = food.nutrition;
-        if (food.saturation !== undefined) result.saturation = food.saturation;
-        if (food.can_always_eat !== undefined) result.can_always_eat = food.can_always_eat;
-    }
-    
-    if (consumable) {
-        if (consumable.sound) result.sound = consumable.sound;
-        if (consumable.consume_particles !== undefined) result.particles = consumable.consume_particles;
-        if (consumable.consume_seconds !== undefined) result.consume_seconds = consumable.consume_seconds;
-        
-        if (consumable.animation) {
-            const anim = consumable.animation.toLowerCase();
-            result.animation = anim === "block" ? "block" : anim === "drink" ? "drink" : "eat";
-        }
-        
-        if (consumable.effects) {
-            result.effects = convertConsumableEffects(consumable.effects);
-        }
-    }
-    
-    return Object.keys(result).length > 0 ? result : null;
-}
-
-function convertConsumableEffects(effects) {
-    const result = {};
-    
-    if (effects.APPLY_EFFECTS) {
-        result.apply_status_effects = {
-            probability: 1,
-            effects: {}
-        };
-        
-        let id = 1;
-        for (const [effectName, effectData] of Object.entries(effects.APPLY_EFFECTS)) {
-            if (typeof effectData === "object") {
-                result.apply_status_effects.effects[`effect_${id++}`] = {
-                    potion: effectName.toUpperCase(),
-                    duration: effectData.duration ?? 20,
-                    amplifier: effectData.amplifier ?? 0,
-                    ambient: effectData.ambient ?? false,
-                    particles: effectData.particles !== false,
-                    icon: effectData.icon !== false
-                };
-            }
-        }
-    }
-    
-    if (effects.REMOVE_EFFECTS && Array.isArray(effects.REMOVE_EFFECTS)) {
-        result.remove_status_effects = {
-            effects: effects.REMOVE_EFFECTS.map(e => e.toUpperCase())
-        };
-    }
-    
-    if (effects.CLEAR_ALL_EFFECTS) {
-        result.clear_status_effects = true;
-    }
-    
-    if (effects.TELEPORT_RANDOMLY) {
-        result.teleport_randomly = {
-            diameter: effects.TELEPORT_RANDOMLY.diameter ?? 5.0
-        };
-    }
-    
-    if (effects.PLAY_SOUND) {
-        result.play_sound = {
-            sound: effects.PLAY_SOUND.sound || "entity.generic.eat"
-        };
-    }
-    
-    return Object.keys(result).length > 0 ? result : null;
-}
-
-function convertEquippable(equippable) {
-    const result = {};
-    
-    if (equippable.slot) result.slot = equippable.slot;
-    if (equippable.model) result.id = equippable.model;
-    if (equippable.camera_overlay) result.camera_overlay = equippable.camera_overlay;
-    if (equippable.equip_sound) result.equip_sound = equippable.equip_sound;
-    if (equippable.allowed_entities) result.allowed_entities = equippable.allowed_entities;
-    if (equippable.dispensable !== undefined) result.dispensable = equippable.dispensable;
-    if (equippable.swappable !== undefined) result.swappable = equippable.swappable;
-    if (equippable.damage_on_hurt !== undefined) result.damage_on_hurt = equippable.damage_on_hurt;
-    
-    return Object.keys(result).length > 0 ? result : null;
-}
-
-function mapField(source, dest, sourcePath, destPath) {
-    if (Array.isArray(sourcePath)) {
-        for (const path of sourcePath) {
-            if (source[path] !== undefined) {
-                setNestedValue(dest, destPath, source[path]);
+        async function readBatch() {
+            const entries = await readEntries(reader);
+            if (!entries.length) {
                 return;
             }
-        }
-    } else {
-        if (source[sourcePath] !== undefined) {
-            setNestedValue(dest, destPath, source[sourcePath]);
-        }
-    }
-}
 
-function setNestedValue(obj, path, value) {
-    const keys = path.split(".");
-    let current = obj;
-    for (let i = 0; i < keys.length - 1; i++) {
-        if (!current[keys[i]]) {
-            current[keys[i]] = {};
-        }
-        current = current[keys[i]];
-    }
-    current[keys[keys.length - 1]] = value;
-}
-
-async function processResourcePack(files, structure) {
-    const resourcePack = {};
-    const validAssetsFolders = ["models", "textures", "font", "lang", "blockstates", "shaders", "equipment", "items", "particles", "post_effect", "texts", "atlases"];
-    
-    // Filtrar arquivos do pack
-    const packFiles = files.filter(f => {
-        const path = getRelativePath(f).toLowerCase();
-        return path.includes("/pack/") || path.startsWith("pack/");
-    });
-    
-    for (const file of packFiles) {
-        const relativePath = getRelativePath(file);
-        const pathParts = relativePath.toLowerCase().split("/pack/");
-        
-        if (pathParts.length < 2) continue;
-        
-        const afterPack = pathParts[1];
-        
-        // Verificar se está em assets/minecraft ou assets/[namespace]
-        if (afterPack.startsWith("assets/minecraft/")) {
-            const assetPath = afterPack.replace("assets/minecraft/", "");
-            const firstPart = assetPath.split("/")[0];
-            
-            if (validAssetsFolders.includes(firstPart)) {
-                const outputPath = `ItemsAdder/contents/${structure.type}/resource_pack/assets/minecraft/${assetPath}`;
-                resourcePack[outputPath] = await file.arrayBuffer();
+            for (const child of entries) {
+                await walkFileTree(child, files);
             }
-        } else if (afterPack.startsWith("assets/")) {
-            // Outros namespaces
-            const outputPath = `ItemsAdder/contents/${structure.type}/resource_pack/${afterPack}`;
-            resourcePack[outputPath] = await file.arrayBuffer();
+
+            await readBatch();
+        }
+
+        await readBatch();
+    }
+}
+
+function entryToFile(entry) {
+    return new Promise((resolve, reject) => {
+        entry.file(
+            (file) => {
+                const relativePath = cleanFullPath(entry.fullPath) || file.name;
+                Object.defineProperty(file, "_relativePath", {
+                    value: relativePath,
+                    writable: false,
+                    configurable: true,
+                });
+                resolve(file);
+            },
+            (error) => reject(error)
+        );
+    });
+}
+
+function readEntries(reader) {
+    return new Promise((resolve, reject) => {
+        reader.readEntries(resolve, reject);
+    });
+}
+
+function detectSourceFromFiles(files) {
+    if (!files || !files.length) {
+        return "";
+    }
+
+    const roots = new Set();
+
+    for (const file of files) {
+        const relativePath = normalizePath(getRelativePath(file));
+        if (!relativePath) {
+            continue;
+        }
+
+        const [root] = relativePath.split("/");
+        if (root) {
+            roots.add(root);
         }
     }
-    
-    return Object.keys(resourcePack).length > 0 ? resourcePack : null;
+
+    if (!roots.size) {
+        return files[0].name || "";
+    }
+
+    if (roots.size === 1) {
+        return roots.values().next().value;
+    }
+
+    return `${roots.size} pastas`;
 }
 
-function displayConverterResult(result) {
-    converterSourceInfo.textContent = `Tipo detectado: ${result.type.toUpperCase()}`;
-    converterFileCount.textContent = `${result.stats.itemsConverted} itens convertidos${result.stats.hasResourcePack ? " + Resource Pack" : ""}`;
-    
-    const summary = document.createElement("div");
-    summary.className = "converter-summary-content";
-    summary.innerHTML = `
-        <h4>Resumo da conversão:</h4>
-        <ul>
-            <li><strong>Plugin origem:</strong> ${result.type.toUpperCase()}</li>
-            <li><strong>Itens convertidos:</strong> ${result.stats.itemsConverted}</li>
-            <li><strong>Resource Pack:</strong> ${result.stats.hasResourcePack ? "Incluído" : "Não encontrado"}</li>
-        </ul>
-        <p class="hint">O arquivo ZIP está pronto para ser extraído em <code>plugins/ItemsAdder/contents/</code></p>
-    `;
-    
-    converterSummary.innerHTML = "";
-    converterSummary.appendChild(summary);
+function detectSourceFromDataTransfer(dataTransfer, files) {
+    if (dataTransfer.items && dataTransfer.items.length) {
+        const roots = new Set();
+
+        for (const item of dataTransfer.items) {
+            const entry = item.webkitGetAsEntry?.();
+            if (!entry) {
+                continue;
+            }
+
+            const cleanPath = cleanFullPath(entry.fullPath);
+            const [root] = cleanPath.split("/");
+            if (root) {
+                roots.add(root);
+            }
+        }
+
+        if (roots.size === 1) {
+            return roots.values().next().value;
+        }
+        if (roots.size > 1) {
+            return `${roots.size} pastas`;
+        }
+    }
+
+    return detectSourceFromFiles(files);
 }
 
-function showConverterFeedback(message, variant) {
-    converterFeedback.textContent = message;
-    converterFeedback.dataset.variant = variant;
+function cleanFullPath(fullPath = "") {
+    return fullPath.replace(/^\//, "");
 }
 
-function setConverterBusyState(isBusy) {
-    converterDropZone.classList.toggle("is-busy", isBusy);
-    converterDropZone.setAttribute("aria-busy", isBusy ? "true" : "false");
-    converterBrowseBtn.disabled = isBusy;
-}
+const modelAdditionsDrop = document.getElementById("model-additions-drop");
+const modelBaseDrop = document.getElementById("model-base-drop");
 
+if (modelAdditionsDrop && modelBaseDrop) {
+    const modelSection = document.getElementById("modeldata");
+    const additionsInput = document.getElementById("model-additions-input");
+    const additionsBrowseBtn = document.getElementById("model-additions-browse");
+    const additionsFeedback = document.getElementById("model-additions-feedback");
+    const additionsSummary = document.getElementById("model-additions-summary");
+
+    const baseInput = document.getElementById("model-base-input");
+    const baseBrowseBtn = document.getElementById("model-base-browse");
+    const baseFeedback = document.getElementById("model-base-feedback");
+    const baseSummary = document.getElementById("model-base-summary");
+
+    const processBtn = document.getElementById("modeldata-process-btn");
+    const generalFeedback = document.getElementById("modeldata-feedback");
+    const previewSection = document.getElementById("modeldata-preview");
+    const previewList = document.getElementById("modeldata-preview-list");
+    const previewSummary = document.getElementById("modeldata-summary");
+    const downloadZipBtn = document.getElementById("modeldata-download-btn");
+
+    const modelState = {
+        additionsFiles: [],
+        baseFiles: [],
+        zipBlob: null,
+    };
+
+    let isProcessingModels = false;
+
+    setupModelDropZone({
+        zone: modelAdditionsDrop,
+        input: additionsInput,
+        browseBtn: additionsBrowseBtn,
+        feedbackEl: additionsFeedback,
+        async onFiles(payload) {
+            await handleAdditions(payload);
+        },
+    });
+
+    setupModelDropZone({
+        zone: modelBaseDrop,
+        input: baseInput,
+        browseBtn: baseBrowseBtn,
+        feedbackEl: baseFeedback,
+        async onFiles(payload) {
+            await handleBase(payload);
+        },
+    });
+
+    processBtn?.addEventListener("click", () => {
+        void handleModelProcessing();
+    });
+
+    downloadZipBtn?.addEventListener("click", () => {
+        if (!modelState.zipBlob) {
+            updateFeedbackElement(generalFeedback, "Gere a mescla antes de baixar.", "error");
+            return;
+        }
+        triggerZipDownload(modelState.zipBlob);
+    });
+
+    function refreshModelProcessState() {
+        const canProcess = modelState.additionsFiles.length > 0 && modelState.baseFiles.length > 0;
+        if (processBtn) {
+            processBtn.disabled = !canProcess || isProcessingModels;
+        }
+        if (downloadZipBtn) {
+            downloadZipBtn.disabled = !modelState.zipBlob;
+        }
+    }
+
+    function resetModelPreview() {
+        if (previewSection) {
+            previewSection.hidden = true;
+        }
+        if (previewList) {
+            previewList.innerHTML = "";
+        }
+        if (previewSummary) {
+            previewSummary.textContent = "";
+        }
+        modelState.zipBlob = null;
+        refreshModelProcessState();
+    }
+
+    async function handleAdditions({ jsonFiles, ignoredCount }) {
+        modelState.additionsFiles = jsonFiles;
+        renderModelSummary(additionsSummary, jsonFiles);
+
+        if (!jsonFiles.length) {
+            updateFeedbackElement(additionsFeedback, "Nenhum arquivo .json detectado.", "error");
+        } else {
+            const messageParts = [`${jsonFiles.length} arquivo${jsonFiles.length === 1 ? "" : "s"} .json carregado${jsonFiles.length === 1 ? "" : "s"}.`];
+            if (ignoredCount > 0) {
+                messageParts.push(`${ignoredCount} arquivo${ignoredCount === 1 ? "" : "s"} ignorado${ignoredCount === 1 ? "" : "s"} por não serem .json.`);
+            }
+            updateFeedbackElement(additionsFeedback, messageParts.join(" "), "success");
+        }
+
+        updateFeedbackElement(generalFeedback, "", "");
+        resetModelPreview();
+        refreshModelProcessState();
+    }
+
+    async function handleBase({ jsonFiles, ignoredCount }) {
+        modelState.baseFiles = jsonFiles;
+        renderModelSummary(baseSummary, jsonFiles);
+
+        if (!jsonFiles.length) {
+            updateFeedbackElement(baseFeedback, "Nenhum arquivo .json detectado.", "error");
+        } else {
+            const messageParts = [`${jsonFiles.length} arquivo${jsonFiles.length === 1 ? "" : "s"} .json carregado${jsonFiles.length === 1 ? "" : "s"}.`];
+            if (ignoredCount > 0) {
+                messageParts.push(`${ignoredCount} arquivo${ignoredCount === 1 ? "" : "s"} ignorado${ignoredCount === 1 ? "" : "s"} por não serem .json.`);
+            }
+            updateFeedbackElement(baseFeedback, messageParts.join(" "), "success");
+        }
+
+        updateFeedbackElement(generalFeedback, "", "");
+        resetModelPreview();
+        refreshModelProcessState();
+    }
+
+    async function handleModelProcessing() {
+        if (isProcessingModels || !processBtn) {
+            return;
+        }
+
+        const canProcess = modelState.additionsFiles.length > 0 && modelState.baseFiles.length > 0;
+        if (!canProcess) {
+            updateFeedbackElement(generalFeedback, "Selecione os arquivos de entrada antes de processar.", "error");
+            return;
+        }
+
+        isProcessingModels = true;
+        if (modelSection) {
+            modelSection.setAttribute("aria-busy", "true");
+        }
+        updateFeedbackElement(generalFeedback, "Mesclando arquivos...", "info");
+        resetModelPreview();
+        refreshModelProcessState();
+
+        try {
+            const additionParse = await parseModelFiles(modelState.additionsFiles);
+            const baseParse = await parseModelFiles(modelState.baseFiles);
+
+            if (additionParse.errors.length || baseParse.errors.length) {
+                const firstError = [...additionParse.errors, ...baseParse.errors][0];
+                const message = firstError ? `Erro ao ler ${firstError.key}: ${firstError.message}` : "Erro ao ler arquivos selecionados.";
+                updateFeedbackElement(generalFeedback, message, "error");
+                console.error("Falha ao ler arquivos de modelo:", additionParse.errors, baseParse.errors);
+                return;
+            }
+
+            const mergeResult = buildModelMerge(additionParse.map, baseParse.map);
+            if (!mergeResult.changedFiles.length) {
+                updateFeedbackElement(generalFeedback, "Nenhum override novo foi identificado com os arquivos fornecidos.", "error");
+                return;
+            }
+
+            const zipBlob = await buildModelZip({
+                changedFiles: mergeResult.changedFiles,
+                baseMap: baseParse.map,
+            });
+            modelState.zipBlob = zipBlob;
+
+            renderPreviewList(previewList, mergeResult.changedFiles);
+            if (previewSection) {
+                previewSection.hidden = false;
+            }
+            if (previewSummary) {
+                previewSummary.textContent = formatModelSummary(mergeResult.stats, mergeResult.changedFiles.length, mergeResult.skippedCount);
+            }
+
+            updateFeedbackElement(generalFeedback, "Mesclagem concluída! Revise os arquivos abaixo.", "success");
+        } catch (error) {
+            console.error("Erro ao mesclar CustomModelData:", error);
+            updateFeedbackElement(generalFeedback, "Erro ao mesclar arquivos. Verifique o console para detalhes.", "error");
+        } finally {
+            isProcessingModels = false;
+            if (modelSection) {
+                modelSection.setAttribute("aria-busy", "false");
+            }
+            refreshModelProcessState();
+        }
+    }
+
+    function setupModelDropZone({ zone, input, browseBtn, feedbackEl, onFiles }) {
+        if (!zone || !input || typeof onFiles !== "function") {
+            return;
+        }
+
+        browseBtn?.addEventListener("click", () => input.click());
+
+        zone.addEventListener("click", (event) => {
+            if (event.target === zone || event.target.closest(".drop-zone__content")) {
+                input.click();
+            }
+        });
+
+        zone.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                input.click();
+            }
+        });
+
+        zone.addEventListener("dragover", (event) => {
+            event.preventDefault();
+            zone.classList.add("is-dragover");
+        });
+
+        zone.addEventListener("dragleave", (event) => {
+            if (!zone.contains(event.relatedTarget)) {
+                zone.classList.remove("is-dragover");
+            }
+        });
+
+        zone.addEventListener("drop", async (event) => {
+            event.preventDefault();
+            zone.classList.remove("is-dragover");
+            const files = await extractFilesFromDataTransfer(event.dataTransfer);
+            await handleIncomingFiles(files);
+        });
+
+        input.addEventListener("change", async (event) => {
+            const files = [...event.target.files];
+            await handleIncomingFiles(files);
+            input.value = "";
+        });
+
+        async function handleIncomingFiles(files) {
+            if (!files.length) {
+                updateFeedbackElement(feedbackEl, "Nenhum arquivo foi selecionado.", "error");
+                return;
+            }
+
+            setDropBusyState(zone, browseBtn, true);
+            updateFeedbackElement(feedbackEl, "Carregando arquivos...", "info");
+
+            try {
+                const jsonFiles = filterJsonFiles(files);
+                await onFiles({
+                    jsonFiles,
+                    ignoredCount: files.length - jsonFiles.length,
+                    totalCount: files.length,
+                });
+            } catch (error) {
+                console.error("Erro ao processar arquivos:", error);
+                updateFeedbackElement(feedbackEl, "Erro ao processar arquivos.", "error");
+            } finally {
+                setDropBusyState(zone, browseBtn, false);
+            }
+        }
+    }
+
+    function setDropBusyState(zone, browseBtn, isBusy) {
+        zone.classList.toggle("is-busy", isBusy);
+        zone.setAttribute("aria-busy", isBusy ? "true" : "false");
+        if (browseBtn) {
+            browseBtn.disabled = isBusy;
+        }
+    }
+
+    function updateFeedbackElement(element, message, variant) {
+        if (!element) {
+            return;
+        }
+        element.textContent = message || "";
+        if (variant) {
+            element.dataset.variant = variant;
+        } else {
+            delete element.dataset.variant;
+        }
+    }
+
+    function filterJsonFiles(files) {
+        return files.filter((file) => {
+            const path = normalizePath(getRelativePath(file));
+            return path.toLowerCase().endsWith(".json");
+        });
+    }
+
+    function renderModelSummary(target, files) {
+        if (!target) {
+            return;
+        }
+        if (!files.length) {
+            target.textContent = "";
+            return;
+        }
+        const keys = Array.from(new Set(files.map(deriveModelKeyFromFile)));
+        const sample = keys.slice(0, 3).join(", ");
+        const suffix = keys.length > 3 ? ", ..." : "";
+        target.textContent = `${keys.length} arquivo${keys.length === 1 ? "" : "s"} .json detectado${keys.length === 1 ? "" : "s"} — ${sample}${suffix}`;
+    }
+
+    function deriveModelKeyFromFile(file) {
+        const relativePath = normalizePath(getRelativePath(file));
+        return getModelFileKey(relativePath || file.name);
+    }
+
+    function getModelFileKey(path = "") {
+        if (!path) {
+            return "";
+        }
+        const segments = path.split("/").filter(Boolean);
+        if (!segments.length) {
+            return "";
+        }
+        const itemIndex = segments.lastIndexOf("item");
+        if (itemIndex !== -1 && itemIndex < segments.length - 1) {
+            return segments.slice(itemIndex + 1).join("/");
+        }
+        return segments[segments.length - 1];
+    }
+
+    async function parseModelFiles(files) {
+        const map = new Map();
+        const errors = [];
+
+        for (const file of files) {
+            const key = deriveModelKeyFromFile(file);
+            if (!key) {
+                continue;
+            }
+
+            try {
+                const text = await file.text();
+                const json = JSON.parse(text);
+                map.set(key, { json, text });
+            } catch (error) {
+                errors.push({
+                    key,
+                    message: error instanceof Error ? error.message : String(error),
+                });
+            }
+        }
+
+        return { map, errors };
+    }
+
+    function buildModelMerge(additionMap, baseMap) {
+        const changedFiles = [];
+        const stats = {
+            merged: 0,
+            created: 0,
+            overridesAdded: 0,
+            duplicatesSkipped: 0,
+        };
+        let skippedCount = 0;
+
+        for (const [key, addition] of additionMap.entries()) {
+            const base = baseMap.get(key);
+
+            if (base) {
+                const mergeOutcome = mergeModelOverrides(base.json, addition.json);
+                if (mergeOutcome.addedCount > 0) {
+                    stats.merged += 1;
+                    stats.overridesAdded += mergeOutcome.addedCount;
+                    if (mergeOutcome.duplicateCount) {
+                        stats.duplicatesSkipped += mergeOutcome.duplicateCount;
+                    }
+                    changedFiles.push({
+                        key,
+                        jsonText: formatModelJson(mergeOutcome.json),
+                        isNew: false,
+                        addedCount: mergeOutcome.addedCount,
+                        startValue: mergeOutcome.startValue,
+                        endValue: mergeOutcome.endValue,
+                        duplicateCount: mergeOutcome.duplicateCount,
+                    });
+                } else {
+                    skippedCount += 1;
+                    stats.duplicatesSkipped += mergeOutcome.duplicateCount;
+                }
+            } else {
+                const jsonClone = JSON.parse(JSON.stringify(addition.json));
+                const addedCount = countOverridesInJson(jsonClone);
+                const sourceEntry = additionMap.get(key);
+                stats.created += 1;
+                stats.overridesAdded += addedCount;
+                changedFiles.push({
+                    key,
+                    jsonText: formatModelJson(jsonClone),
+                    isNew: true,
+                    addedCount,
+                    duplicateCount: 0,
+                });
+            }
+        }
+
+        return { changedFiles, stats, skippedCount };
+    }
+
+    function mergeModelOverrides(baseJson, additionJson) {
+        const merged = JSON.parse(JSON.stringify(baseJson || {}));
+        const baseOverrides = Array.isArray(merged.overrides) ? merged.overrides.filter(Boolean) : [];
+        const additionOverrides = Array.isArray(additionJson?.overrides) ? additionJson.overrides.filter(Boolean) : [];
+
+        let currentMax = null;
+        for (const override of baseOverrides) {
+            const value = getCustomModelDataValue(override);
+            if (typeof value === "number") {
+                currentMax = currentMax === null ? value : Math.max(currentMax, value);
+            }
+        }
+
+        const existingModels = new Set(
+            baseOverrides
+                .map(getOverrideModelPath)
+                .filter((modelPath) => !!modelPath)
+        );
+
+        const startValue = currentMax === null ? 1 : currentMax + 1;
+        let nextValue = startValue;
+        const appended = [];
+        let duplicateCount = 0;
+
+        for (const rawOverride of additionOverrides) {
+            const normalized = normalizeModelOverride(rawOverride);
+            const normalizedModel = getOverrideModelPath(normalized);
+            if (!normalizedModel) {
+                continue;
+            }
+
+            if (existingModels.has(normalizedModel)) {
+                duplicateCount += 1;
+                continue;
+            }
+
+            existingModels.add(normalizedModel);
+            normalized.predicate.custom_model_data = nextValue;
+            appended.push({
+                custom_model_data: nextValue,
+                model: normalized.model,
+            });
+            baseOverrides.push(normalized);
+            nextValue += 1;
+        }
+
+        if (!appended.length) {
+            return {
+                json: merged,
+                addedCount: 0,
+                startValue: null,
+                endValue: null,
+                duplicateCount,
+            };
+        }
+
+        baseOverrides.sort((a, b) => {
+            const aValue = getCustomModelDataValue(a) ?? 0;
+            const bValue = getCustomModelDataValue(b) ?? 0;
+            return aValue - bValue;
+        });
+
+        merged.overrides = baseOverrides;
+
+        return {
+            json: merged,
+            addedCount: appended.length,
+            startValue: appended[0].custom_model_data,
+            endValue: appended[appended.length - 1].custom_model_data,
+            duplicateCount,
+        };
+    }
+
+    function normalizeModelOverride(rawOverride) {
+        const clone = JSON.parse(JSON.stringify(rawOverride || {}));
+        if (!clone.predicate || typeof clone.predicate !== "object") {
+            clone.predicate = {};
+        }
+        if (typeof clone.model === "string") {
+            clone.model = clone.model.trim();
+        }
+        return clone;
+    }
+
+    function getOverrideModelPath(override) {
+        if (!override || typeof override !== "object") {
+            return "";
+        }
+        const model = override.model;
+        if (typeof model !== "string") {
+            return "";
+        }
+        return model.trim();
+    }
+
+    function getCustomModelDataValue(override) {
+        if (!override || typeof override !== "object") {
+            return null;
+        }
+        const predicate = override.predicate;
+        if (!predicate || typeof predicate !== "object") {
+            return null;
+        }
+        const value = predicate.custom_model_data;
+        return typeof value === "number" ? value : null;
+    }
+
+    function countOverridesInJson(json) {
+        if (!json || typeof json !== "object") {
+            return 0;
+        }
+        return Array.isArray(json.overrides) ? json.overrides.length : 0;
+    }
+
+    async function buildModelZip({ changedFiles, baseMap }) {
+        if (typeof JSZip === "undefined") {
+            throw new Error("JSZip não está disponível.");
+        }
+        const zip = new JSZip();
+        const root = zip.folder("minecraft").folder("models").folder("item");
+
+        const changedLookup = new Map();
+        for (const file of changedFiles) {
+            changedLookup.set(file.key, file);
+        }
+
+        for (const [key, entry] of baseMap.entries()) {
+            const changed = changedLookup.get(key);
+            const content = changed ? changed.jsonText : entry.text ?? JSON.stringify(entry.json, null, 2);
+            root.file(key, content);
+            if (changed) {
+                changedLookup.delete(key);
+            }
+        }
+
+        for (const [key, file] of changedLookup.entries()) {
+            root.file(key, file.jsonText);
+        }
+
+        return zip.generateAsync({ type: "blob" });
+    }
+
+    function triggerZipDownload(blob) {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        const dateStamp = new Date().toISOString().split("T")[0];
+        anchor.href = url;
+        anchor.download = `erisia-modeldata-${dateStamp}.zip`;
+        anchor.click();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+    }
+
+    function renderPreviewList(container, files) {
+        if (!container) {
+            return;
+        }
+
+        container.innerHTML = "";
+        files.forEach((file, index) => {
+            const details = document.createElement("details");
+            details.open = files.length <= 3 && index === 0;
+
+            const summary = document.createElement("summary");
+            const duplicateNote = file.duplicateCount
+                ? ` · ${file.duplicateCount} duplicado${file.duplicateCount === 1 ? "" : "s"} ignorado${file.duplicateCount === 1 ? "" : "s"}`
+                : "";
+            summary.textContent = file.isNew
+                ? `${file.key} • novo arquivo (${file.addedCount} override${file.addedCount === 1 ? "" : "s"})`
+                : `${file.key} • +${file.addedCount} override${file.addedCount === 1 ? "" : "s"} (CMD ${file.startValue} → ${file.endValue})${duplicateNote}`;
+
+            const pre = document.createElement("pre");
+            pre.textContent = file.jsonText;
+
+            details.append(summary, pre);
+            container.append(details);
+        });
+    }
+
+    function formatModelSummary(stats, changedCount, skippedCount) {
+        const parts = [];
+        parts.push(`${changedCount} arquivo${changedCount === 1 ? "" : "s"} pronto${changedCount === 1 ? "" : "s"}`);
+        if (stats.merged) {
+            parts.push(`${stats.merged} mesclado${stats.merged === 1 ? "" : "s"}`);
+        }
+        if (stats.created) {
+            parts.push(`${stats.created} novo${stats.created === 1 ? "" : "s"}`);
+        }
+        parts.push(`${stats.overridesAdded} override${stats.overridesAdded === 1 ? "" : "s"} adicionad${stats.overridesAdded === 1 ? "o" : "os"}`);
+        if (skippedCount) {
+            parts.push(`${skippedCount} sem alterações`);
+        }
+        if (stats.duplicatesSkipped) {
+            parts.push(`${stats.duplicatesSkipped} modelo${stats.duplicatesSkipped === 1 ? "" : "s"} duplicado${stats.duplicatesSkipped === 1 ? "" : "s"}`);
+        }
+        return parts.join(" · ");
+    }
+
+    function formatModelJson(json) {
+        const indent = (level) => "    ".repeat(level);
+        const lines = ["{"];
+
+        const orderedKeys = [];
+        const seen = new Set();
+        const preferredOrder = ["parent", "textures", "overrides"];
+
+        for (const key of preferredOrder) {
+            if (Object.prototype.hasOwnProperty.call(json, key)) {
+                orderedKeys.push(key);
+                seen.add(key);
+            }
+        }
+
+        for (const key of Object.keys(json || {})) {
+            if (!seen.has(key)) {
+                orderedKeys.push(key);
+                seen.add(key);
+            }
+        }
+
+        orderedKeys.forEach((key, index) => {
+            const value = json[key];
+            if (value === undefined) {
+                return;
+            }
+
+            let formattedValue;
+            if (key === "overrides" && Array.isArray(value)) {
+                formattedValue = formatOverridesArray(value, 1);
+            } else if (isPlainObject(value)) {
+                formattedValue = formatMultilineObject(value, 1);
+            } else {
+                formattedValue = JSON.stringify(value);
+            }
+
+            const suffix = index < orderedKeys.length - 1 ? "," : "";
+            lines.push(`${indent(1)}"${key}": ${formattedValue}${suffix}`);
+        });
+
+        lines.push("}");
+        return lines.join("\n");
+    }
+
+    function formatMultilineObject(obj, level) {
+        const indent = (lvl) => "    ".repeat(lvl);
+        const entries = Object.entries(obj || {});
+        if (!entries.length) {
+            return "{}";
+        }
+
+        const lines = ["{"];
+        entries.forEach(([key, value], index) => {
+            let formattedValue;
+            if (isPlainObject(value)) {
+                formattedValue = formatMultilineObject(value, level + 1);
+            } else {
+                formattedValue = JSON.stringify(value);
+            }
+            const suffix = index < entries.length - 1 ? "," : "";
+            lines.push(`${indent(level + 1)}"${key}": ${formattedValue}${suffix}`);
+        });
+        lines.push(`${indent(level)}}`);
+        return lines.join("\n");
+    }
+
+    function formatOverridesArray(overrides, level) {
+        if (!Array.isArray(overrides) || !overrides.length) {
+            return "[]";
+        }
+        const indent = (lvl) => "    ".repeat(lvl);
+        const lines = ["["];
+
+        overrides.forEach((override, index) => {
+            const entry = formatOverrideEntry(override);
+            const suffix = index < overrides.length - 1 ? "," : "";
+            lines.push(`${indent(level + 1)}${entry}${suffix}`);
+        });
+
+        lines.push(`${indent(level)}]`);
+        return lines.join("\n");
+    }
+
+    function formatOverrideEntry(override) {
+        const { predicate = {}, ...rest } = override || {};
+        const parts = [`"predicate": ${formatInlineObject(predicate)}`];
+
+        const orderedRestKeys = Object.keys(rest).sort((a, b) => {
+            if (a === "model") {
+                return -1;
+            }
+            if (b === "model") {
+                return 1;
+            }
+            return a.localeCompare(b);
+        });
+
+        orderedRestKeys.forEach((key) => {
+            const value = rest[key];
+            const formattedValue = isPlainObject(value) ? formatInlineObject(value) : JSON.stringify(value);
+            parts.push(`"${key}": ${formattedValue}`);
+        });
+
+        return `{${parts.join(", ")}}`;
+    }
+
+    function formatInlineObject(obj) {
+        const entries = Object.entries(obj || {});
+        if (!entries.length) {
+            return "{}";
+        }
+        return `{${entries
+            .map(([key, value]) => {
+                const formattedValue = isPlainObject(value) ? formatInlineObject(value) : JSON.stringify(value);
+                return `"${key}": ${formattedValue}`;
+            })
+            .join(", ")}}`;
+    }
+
+    function isPlainObject(value) {
+        return Object.prototype.toString.call(value) === "[object Object]";
+    }
+}
