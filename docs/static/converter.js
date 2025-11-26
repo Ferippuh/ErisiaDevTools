@@ -226,7 +226,7 @@ async function convertItems(files, structure) {
             const relativePath = getRelativePath(file);
             const itemsIndex = relativePath.toLowerCase().indexOf("/items/");
             const fileName = file.name;
-            const outputPath = `ItemsAdder/contents/${structure.type}/${fileName}`;
+            const outputPath = `ItemsAdder/contents/${structure.type}/configs/${fileName}`;
 
             converted[outputPath] = jsyaml.dump(outputConfig, { 
                 lineWidth: -1,
@@ -868,12 +868,12 @@ async function processResourcePack(files, structure) {
             const firstPart = assetPath.split("/")[0];
             
             if (validAssetsFolders.includes(firstPart)) {
-                const outputPath = `ItemsAdder/contents/${structure.type}/resource_pack/assets/minecraft/${assetPath}`;
+                const outputPath = `ItemsAdder/contents/${structure.type}/resourcepack/assets/minecraft/${assetPath}`;
                 resourcePack[outputPath] = await file.arrayBuffer();
             }
         } else if (afterPack.startsWith("assets/")) {
             // Outros namespaces
-            const outputPath = `ItemsAdder/contents/${structure.type}/resource_pack/${afterPack}`;
+            const outputPath = `ItemsAdder/contents/${structure.type}/resourcepack/${afterPack}`;
             resourcePack[outputPath] = await file.arrayBuffer();
         }
     }
@@ -894,7 +894,7 @@ function displayConverterResult(result) {
             <li><strong>Itens convertidos:</strong> ${result.stats.itemsConverted}</li>
             <li><strong>Resource Pack:</strong> ${result.stats.hasResourcePack ? "Incluído" : "Não encontrado"}</li>
         </ul>
-        <p class="hint">O arquivo ZIP está pronto para ser extraído em <code>plugins/ItemsAdder/contents/</code></p>
+        <p class="hint">O arquivo ZIP está pronto para ser extraído em <code>plugins/ItemsAdder/contents/</code>. Os arquivos YAML estarão em <code>configs/</code> e o resource pack em <code>resourcepack/</code>.</p>
     `;
     
     converterSummary.innerHTML = "";
